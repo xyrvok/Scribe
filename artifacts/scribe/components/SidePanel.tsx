@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
   Dimensions,
   Modal,
@@ -143,8 +144,19 @@ function PanelTab({
 }
 
 function FilesTab({ onLongPress }: { onLongPress: (id: string) => void }) {
-  const { activeNoteId, setActiveNote, createNote, createFolder, vaultName } =
-    useNotes();
+  const {
+    activeNoteId,
+    setActiveNote,
+    createNote,
+    createFolder,
+    vaultName,
+    externalRoot,
+    externalLoading,
+    isSafSupported,
+    connectExternalFolder,
+    disconnectExternalFolder,
+    refreshExternalFolder,
+  } = useNotes();
   const { setRightPanelOpen } = usePanels();
   const { activeTheme } = useTheme();
   const c = activeTheme.colors;
@@ -156,14 +168,93 @@ function FilesTab({ onLongPress }: { onLongPress: (id: string) => void }) {
     setRightPanelOpen(false);
   };
 
+  const handleDisconnect = () => {
+    Alert.alert(
+      "Disconnect folder",
+      `Stop using "${externalRoot?.name}"? Your phone files stay where they are; Scribe just goes back to its built-in vault.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Disconnect", onPress: disconnectExternalFolder },
+      ],
+    );
+  };
+
   return (
     <View style={{ flex: 1 }}>
+      {/* Folder source bar */}
+      <View
+        style={[
+          styles.sourceBar,
+          { backgroundColor: c.background, borderBottomColor: c.border },
+        ]}
+      >
+        <Feather
+          name={externalRoot ? "smartphone" : "hard-drive"}
+          size={13}
+          color={c.accent}
+        />
+        <View style={{ flex: 1 }}>
+          <Text
+            style={{ color: c.text, fontSize: 13, fontWeight: "600" }}
+            numberOfLines={1}
+          >
+            {externalRoot ? externalRoot.name : vaultName}
+          </Text>
+          <Text style={{ color: c.mutedText, fontSize: 10, marginTop: 1 }}>
+            {externalRoot ? "Phone folder · live" : "Built-in vault"}
+          </Text>
+        </View>
+        {externalRoot ? (
+          <>
+            <IconButton
+              icon="refresh-ccw"
+              size={28}
+              onPress={refreshExternalFolder}
+              accessibilityLabel="Refresh"
+            />
+            <IconButton
+              icon="log-out"
+              size={28}
+              onPress={handleDisconnect}
+              accessibilityLabel="Disconnect"
+            />
+          </>
+        ) : (
+          <IconButton
+            icon="folder"
+            label="Connect"
+            variant="solid"
+            onPress={async () => {
+              if (!isSafSupported) {
+                Alert.alert(
+                  "Android only",
+                  "Picking a phone folder works in the installed Android app. The web preview uses the in-app vault.",
+                );
+                return;
+              }
+              await connectExternalFolder();
+            }}
+          />
+        )}
+      </View>
+
+      {externalLoading ? (
+        <View
+          style={[styles.loadingBar, { borderBottomColor: c.border }]}
+        >
+          <Feather name="loader" size={12} color={c.mutedText} />
+          <Text style={{ color: c.mutedText, fontSize: 12 }}>
+            Reading folder…
+          </Text>
+        </View>
+      ) : null}
+
       <View style={[styles.actionsRow, { borderBottomColor: c.border }]}>
         <IconButton
           icon="file-plus"
           label="New note"
-          onPress={() => {
-            createNote("/", "Untitled");
+          onPress={async () => {
+            await createNote("/", "Untitled");
             setRightPanelOpen(false);
           }}
         />
@@ -184,9 +275,9 @@ function FilesTab({ onLongPress }: { onLongPress: (id: string) => void }) {
               styles.folderInput,
               { color: c.text, borderColor: c.border },
             ]}
-            onSubmitEditing={() => {
+            onSubmitEditing={async () => {
               if (folderInput.trim()) {
-                createFolder(`/${folderInput.trim()}`);
+                await createFolder(`/${folderInput.trim()}`);
                 setFolderInput("");
                 setShowFolderInput(false);
               }
@@ -195,9 +286,9 @@ function FilesTab({ onLongPress }: { onLongPress: (id: string) => void }) {
           />
           <IconButton
             icon="check"
-            onPress={() => {
+            onPress={async () => {
               if (folderInput.trim()) {
-                createFolder(`/${folderInput.trim()}`);
+                await createFolder(`/${folderInput.trim()}`);
                 setFolderInput("");
                 setShowFolderInput(false);
               }
@@ -213,7 +304,9 @@ function FilesTab({ onLongPress }: { onLongPress: (id: string) => void }) {
       <View style={[styles.hintBox, { borderTopColor: c.border }]}>
         <Feather name="info" size={12} color={c.mutedText} />
         <Text style={[styles.hintText, { color: c.mutedText }]}>
-          Long-press a file for actions. {vaultName === "My Vault" ? "Connect a real folder once you build to your phone." : ""}
+          {externalRoot
+            ? "Edits save back to your phone. Long-press a file for actions."
+            : "Tap Connect to pick a folder on your phone (Documents, Downloads, etc.) and read your real .md and .txt files."}
         </Text>
       </View>
     </View>
@@ -460,6 +553,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  sourceBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  loadingBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
     paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },

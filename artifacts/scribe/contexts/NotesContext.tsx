@@ -5,13 +5,27 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { Alert } from "react-native";
+
+import {
+  createFile as safCreateFile,
+  createSubFolder as safCreateSubFolder,
+  deleteUri as safDelete,
+  isAndroidSafSupported,
+  pickFolder,
+  readFile as safReadFile,
+  scanFolderTree,
+  writeFile as safWriteFile,
+} from "@/lib/safStorage";
 
 const NOTES_KEY = "scribe.notes.v1";
 const FOLDERS_KEY = "scribe.folders.v1";
 const ACTIVE_NOTE_KEY = "scribe.activeNote.v1";
 const VAULT_NAME_KEY = "scribe.vaultName.v1";
+const EXTERNAL_ROOT_KEY = "scribe.externalRoot.v1";
 
 export type NoteFile = {
   id: string;
@@ -21,10 +35,13 @@ export type NoteFile = {
   content: string;
   createdAt: number;
   updatedAt: number;
+  externalUri?: string;
+  loaded?: boolean;
 };
 
 export type FolderEntry = {
   path: string;
+  externalUri?: string;
 };
 
 const generateId = () =>
@@ -49,7 +66,7 @@ A distraction-free writing space inspired by Writer Lite and Pure Writer.
 
 > The cursor jumps out of quotes when you press Enter. Try it.
 
-Swipe in from the right edge to open the file panel.
+Swipe in from the right edge to open the file panel. Tap **Connect folder** to read and write files from your phone.
 
 ---
 
@@ -123,74 +140,110 @@ const SAMPLE_FOLDERS: FolderEntry[] = [
   { path: "/Drafts" },
 ];
 
+export type ExternalRoot = { uri: string; name: string };
+
 type NotesContextValue = {
   notes: NoteFile[];
   folders: FolderEntry[];
   activeNoteId: string | null;
   activeNote: NoteFile | null;
   vaultName: string;
+  externalRoot: ExternalRoot | null;
+  externalLoading: boolean;
   setVaultName: (name: string) => void;
   setActiveNote: (id: string | null) => void;
-  createNote: (folderPath?: string, name?: string) => NoteFile;
+  createNote: (folderPath?: string, name?: string) => Promise<NoteFile | null>;
   updateNoteContent: (id: string, content: string) => void;
   renameNote: (id: string, name: string) => void;
   moveNote: (id: string, folderPath: string) => void;
-  deleteNote: (id: string) => void;
-  createFolder: (path: string) => void;
+  deleteNote: (id: string) => Promise<void>;
+  createFolder: (path: string) => Promise<void>;
   deleteFolder: (path: string) => void;
   notesInFolder: (folderPath: string) => NoteFile[];
   childFolders: (folderPath: string) => FolderEntry[];
   getNote: (id: string) => NoteFile | undefined;
+  connectExternalFolder: () => Promise<boolean>;
+  disconnectExternalFolder: () => void;
+  refreshExternalFolder: () => Promise<void>;
+  isSafSupported: boolean;
 };
 
 const NotesContext = createContext<NotesContextValue | null>(null);
 
 export function NotesProvider({ children }: { children: React.ReactNode }) {
-  const [notes, setNotes] = useState<NoteFile[]>([]);
-  const [folders, setFolders] = useState<FolderEntry[]>([]);
+  // Vault state (used when not connected)
+  const [vaultNotes, setVaultNotes] = useState<NoteFile[]>([]);
+  const [vaultFolders, setVaultFolders] = useState<FolderEntry[]>([]);
+
+  // External (SAF) state
+  const [externalRoot, setExternalRoot] = useState<ExternalRoot | null>(null);
+  const [externalNotes, setExternalNotes] = useState<NoteFile[]>([]);
+  const [externalFolders, setExternalFolders] = useState<FolderEntry[]>([]);
+  const [externalLoading, setExternalLoading] = useState(false);
+
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [vaultName, setVaultNameState] = useState<string>("My Vault");
   const [hydrated, setHydrated] = useState(false);
 
+  const safSupported = isAndroidSafSupported();
+  const isExternal = externalRoot !== null;
+
+  const notes = isExternal ? externalNotes : vaultNotes;
+  const folders = isExternal ? externalFolders : vaultFolders;
+
+  const writeTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Hydrate from AsyncStorage
   useEffect(() => {
     (async () => {
       try {
-        const [n, f, a, v] = await Promise.all([
+        const [n, f, a, v, ext] = await Promise.all([
           AsyncStorage.getItem(NOTES_KEY),
           AsyncStorage.getItem(FOLDERS_KEY),
           AsyncStorage.getItem(ACTIVE_NOTE_KEY),
           AsyncStorage.getItem(VAULT_NAME_KEY),
+          AsyncStorage.getItem(EXTERNAL_ROOT_KEY),
         ]);
         if (n && f) {
-          setNotes(JSON.parse(n));
-          setFolders(JSON.parse(f));
+          setVaultNotes(JSON.parse(n));
+          setVaultFolders(JSON.parse(f));
         } else {
-          setNotes(SAMPLE_NOTES);
-          setFolders(SAMPLE_FOLDERS);
+          setVaultNotes(SAMPLE_NOTES);
+          setVaultFolders(SAMPLE_FOLDERS);
         }
         if (a) setActiveNoteId(a);
         else setActiveNoteId("welcome");
         if (v) setVaultNameState(v);
+        if (ext) {
+          const parsed = JSON.parse(ext) as ExternalRoot;
+          setExternalRoot(parsed);
+          // Load tree in background
+          loadExternalTree(parsed).catch(() => {});
+        }
       } catch (err) {
         console.warn("Failed to load notes", err);
-        setNotes(SAMPLE_NOTES);
-        setFolders(SAMPLE_FOLDERS);
+        setVaultNotes(SAMPLE_NOTES);
+        setVaultFolders(SAMPLE_FOLDERS);
         setActiveNoteId("welcome");
       } finally {
         setHydrated(true);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Persist vault state
   useEffect(() => {
     if (!hydrated) return;
-    AsyncStorage.setItem(NOTES_KEY, JSON.stringify(notes)).catch(() => {});
-  }, [notes, hydrated]);
+    AsyncStorage.setItem(NOTES_KEY, JSON.stringify(vaultNotes)).catch(() => {});
+  }, [vaultNotes, hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
-    AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify(folders)).catch(() => {});
-  }, [folders, hydrated]);
+    AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify(vaultFolders)).catch(
+      () => {},
+    );
+  }, [vaultFolders, hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -202,16 +255,147 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.setItem(VAULT_NAME_KEY, vaultName).catch(() => {});
   }, [vaultName, hydrated]);
 
-  const setActiveNote = useCallback((id: string | null) => {
-    setActiveNoteId(id);
+  useEffect(() => {
+    if (!hydrated) return;
+    if (externalRoot) {
+      AsyncStorage.setItem(
+        EXTERNAL_ROOT_KEY,
+        JSON.stringify(externalRoot),
+      ).catch(() => {});
+    } else {
+      AsyncStorage.removeItem(EXTERNAL_ROOT_KEY).catch(() => {});
+    }
+  }, [externalRoot, hydrated]);
+
+  // Load external tree from SAF
+  const loadExternalTree = useCallback(
+    async (root: ExternalRoot) => {
+      if (!safSupported) return;
+      setExternalLoading(true);
+      try {
+        const tree = await scanFolderTree(root.uri);
+        const folderEntries: FolderEntry[] = [
+          { path: "/", externalUri: root.uri },
+          ...tree.folders.map((f) => ({
+            path: f.relativePath,
+            externalUri: f.uri,
+          })),
+        ];
+        const noteEntries: NoteFile[] = tree.files.map((f) => ({
+          id: `ext::${f.uri}`,
+          name: f.name,
+          folderPath: f.folderPath,
+          ext: f.ext,
+          content: "",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          externalUri: f.uri,
+          loaded: false,
+        }));
+        setExternalFolders(folderEntries);
+        setExternalNotes(noteEntries);
+      } catch (err) {
+        console.warn("Failed to scan external folder", err);
+        Alert.alert(
+          "Folder error",
+          "Couldn't read that folder. The permission may have been revoked — try reconnecting.",
+        );
+      } finally {
+        setExternalLoading(false);
+      }
+    },
+    [safSupported],
+  );
+
+  const connectExternalFolder = useCallback(async (): Promise<boolean> => {
+    if (!safSupported) {
+      Alert.alert(
+        "Not supported here",
+        "Picking a phone folder needs the Android version of Scribe. The in-app vault is fully usable.",
+      );
+      return false;
+    }
+    const result = await pickFolder();
+    if (!result) return false;
+    setExternalRoot(result);
+    await loadExternalTree(result);
+    setActiveNoteId(null);
+    return true;
+  }, [safSupported, loadExternalTree]);
+
+  const disconnectExternalFolder = useCallback(() => {
+    setExternalRoot(null);
+    setExternalNotes([]);
+    setExternalFolders([]);
+    setActiveNoteId("welcome");
   }, []);
+
+  const refreshExternalFolder = useCallback(async () => {
+    if (externalRoot) await loadExternalTree(externalRoot);
+  }, [externalRoot, loadExternalTree]);
+
+  const setActiveNote = useCallback(
+    (id: string | null) => {
+      setActiveNoteId(id);
+      // Lazy-load external file content on open
+      if (id && isExternal) {
+        const note = externalNotes.find((n) => n.id === id);
+        if (note && note.externalUri && !note.loaded) {
+          safReadFile(note.externalUri)
+            .then((content) => {
+              setExternalNotes((prev) =>
+                prev.map((n) =>
+                  n.id === id ? { ...n, content, loaded: true } : n,
+                ),
+              );
+            })
+            .catch((err) => {
+              console.warn("Failed to read file", err);
+              Alert.alert("Read error", "Couldn't read this file from disk.");
+            });
+        }
+      }
+    },
+    [isExternal, externalNotes],
+  );
 
   const setVaultName = useCallback((name: string) => {
     setVaultNameState(name);
   }, []);
 
   const createNote = useCallback(
-    (folderPath: string = "/", name: string = "Untitled"): NoteFile => {
+    async (
+      folderPath: string = "/",
+      name: string = "Untitled",
+    ): Promise<NoteFile | null> => {
+      if (isExternal && externalRoot) {
+        const target = externalFolders.find((f) => f.path === folderPath);
+        const parentUri = target?.externalUri ?? externalRoot.uri;
+        try {
+          const { uri } = await safCreateFile(parentUri, name, "md");
+          const note: NoteFile = {
+            id: `ext::${uri}`,
+            name,
+            folderPath,
+            ext: "md",
+            content: "",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            externalUri: uri,
+            loaded: true,
+          };
+          setExternalNotes((prev) => [note, ...prev]);
+          setActiveNoteId(note.id);
+          return note;
+        } catch (err) {
+          console.warn("Failed to create file", err);
+          Alert.alert(
+            "Create failed",
+            "Couldn't create the file in the connected folder.",
+          );
+          return null;
+        }
+      }
       const note: NoteFile = {
         id: generateId(),
         name,
@@ -221,31 +405,70 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
-      setNotes((prev) => [note, ...prev]);
+      setVaultNotes((prev) => [note, ...prev]);
       setActiveNoteId(note.id);
       return note;
     },
-    [],
+    [isExternal, externalRoot, externalFolders],
   );
 
-  const updateNoteContent = useCallback((id: string, content: string) => {
-    setNotes((prev) =>
-      prev.map((n) =>
-        n.id === id ? { ...n, content, updatedAt: Date.now() } : n,
-      ),
-    );
-  }, []);
+  const updateNoteContent = useCallback(
+    (id: string, content: string) => {
+      if (isExternal) {
+        setExternalNotes((prev) =>
+          prev.map((n) =>
+            n.id === id
+              ? { ...n, content, updatedAt: Date.now(), loaded: true }
+              : n,
+          ),
+        );
+        // Debounced write to disk
+        const note = externalNotes.find((n) => n.id === id);
+        if (note?.externalUri) {
+          if (writeTimers.current[id]) clearTimeout(writeTimers.current[id]);
+          writeTimers.current[id] = setTimeout(() => {
+            safWriteFile(note.externalUri!, content).catch((err) => {
+              console.warn("Failed to write file", err);
+            });
+          }, 600);
+        }
+      } else {
+        setVaultNotes((prev) =>
+          prev.map((n) =>
+            n.id === id ? { ...n, content, updatedAt: Date.now() } : n,
+          ),
+        );
+      }
+    },
+    [isExternal, externalNotes],
+  );
 
-  const renameNote = useCallback((id: string, name: string) => {
-    setNotes((prev) =>
-      prev.map((n) =>
-        n.id === id ? { ...n, name, updatedAt: Date.now() } : n,
-      ),
-    );
-  }, []);
+  const renameNote = useCallback(
+    (id: string, name: string) => {
+      if (isExternal) {
+        // SAF can't rename in place easily; update display only.
+        setExternalNotes((prev) =>
+          prev.map((n) =>
+            n.id === id ? { ...n, name, updatedAt: Date.now() } : n,
+          ),
+        );
+        Alert.alert(
+          "Rename note",
+          "Note: renaming in a connected folder only changes the title in Scribe. The file on disk keeps its original filename. (Android limitation.)",
+        );
+        return;
+      }
+      setVaultNotes((prev) =>
+        prev.map((n) =>
+          n.id === id ? { ...n, name, updatedAt: Date.now() } : n,
+        ),
+      );
+    },
+    [isExternal],
+  );
 
   const moveNote = useCallback((id: string, folderPath: string) => {
-    setNotes((prev) =>
+    setVaultNotes((prev) =>
       prev.map((n) =>
         n.id === id ? { ...n, folderPath, updatedAt: Date.now() } : n,
       ),
@@ -253,28 +476,73 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const deleteNote = useCallback(
-    (id: string) => {
-      setNotes((prev) => prev.filter((n) => n.id !== id));
+    async (id: string) => {
+      if (isExternal) {
+        const note = externalNotes.find((n) => n.id === id);
+        if (note?.externalUri) {
+          try {
+            await safDelete(note.externalUri);
+          } catch (err) {
+            console.warn("Failed to delete file", err);
+            Alert.alert("Delete failed", "Couldn't delete the file on disk.");
+            return;
+          }
+        }
+        setExternalNotes((prev) => prev.filter((n) => n.id !== id));
+        if (activeNoteId === id) setActiveNoteId(null);
+        return;
+      }
+      setVaultNotes((prev) => prev.filter((n) => n.id !== id));
       if (activeNoteId === id) setActiveNoteId(null);
     },
-    [activeNoteId],
+    [isExternal, externalNotes, activeNoteId],
   );
 
-  const createFolder = useCallback((path: string) => {
-    const cleaned = path.startsWith("/") ? path : `/${path}`;
-    setFolders((prev) => {
-      if (prev.some((p) => p.path === cleaned)) return prev;
-      return [...prev, { path: cleaned }];
-    });
-  }, []);
+  const createFolder = useCallback(
+    async (path: string) => {
+      const cleaned = path.startsWith("/") ? path : `/${path}`;
+      if (isExternal && externalRoot) {
+        const folderName = cleaned.split("/").pop() ?? "";
+        if (!folderName) return;
+        try {
+          const { uri } = await safCreateSubFolder(
+            externalRoot.uri,
+            folderName,
+          );
+          setExternalFolders((prev) => {
+            if (prev.some((p) => p.path === cleaned)) return prev;
+            return [...prev, { path: cleaned, externalUri: uri }];
+          });
+        } catch (err) {
+          console.warn("Failed to make folder", err);
+          Alert.alert(
+            "Folder failed",
+            "Couldn't create that folder. Try a simpler name.",
+          );
+        }
+        return;
+      }
+      setVaultFolders((prev) => {
+        if (prev.some((p) => p.path === cleaned)) return prev;
+        return [...prev, { path: cleaned }];
+      });
+    },
+    [isExternal, externalRoot],
+  );
 
-  const deleteFolder = useCallback((path: string) => {
-    if (path === "/") return;
-    setFolders((prev) => prev.filter((f) => f.path !== path));
-    setNotes((prev) =>
-      prev.map((n) => (n.folderPath === path ? { ...n, folderPath: "/" } : n)),
-    );
-  }, []);
+  const deleteFolder = useCallback(
+    (path: string) => {
+      if (path === "/") return;
+      if (isExternal) return;
+      setVaultFolders((prev) => prev.filter((f) => f.path !== path));
+      setVaultNotes((prev) =>
+        prev.map((n) =>
+          n.folderPath === path ? { ...n, folderPath: "/" } : n,
+        ),
+      );
+    },
+    [isExternal],
+  );
 
   const notesInFolder = useCallback(
     (folderPath: string) =>
@@ -305,9 +573,14 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   );
 
   const activeNote = useMemo(
-    () => (activeNoteId ? (notes.find((n) => n.id === activeNoteId) ?? null) : null),
+    () =>
+      activeNoteId
+        ? (notes.find((n) => n.id === activeNoteId) ?? null)
+        : null,
     [activeNoteId, notes],
   );
+
+  const computedVaultName = isExternal && externalRoot ? externalRoot.name : vaultName;
 
   const value = useMemo(
     () => ({
@@ -315,7 +588,9 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       folders,
       activeNoteId,
       activeNote,
-      vaultName,
+      vaultName: computedVaultName,
+      externalRoot,
+      externalLoading,
       setVaultName,
       setActiveNote,
       createNote,
@@ -328,13 +603,19 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       notesInFolder,
       childFolders,
       getNote,
+      connectExternalFolder,
+      disconnectExternalFolder,
+      refreshExternalFolder,
+      isSafSupported: safSupported,
     }),
     [
       notes,
       folders,
       activeNoteId,
       activeNote,
-      vaultName,
+      computedVaultName,
+      externalRoot,
+      externalLoading,
       setVaultName,
       setActiveNote,
       createNote,
@@ -347,6 +628,10 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       notesInFolder,
       childFolders,
       getNote,
+      connectExternalFolder,
+      disconnectExternalFolder,
+      refreshExternalFolder,
+      safSupported,
     ],
   );
 

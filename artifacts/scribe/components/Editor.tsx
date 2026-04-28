@@ -113,43 +113,49 @@ export function Editor({
   const handleChangeText = useCallback(
     (newText: string) => {
       const oldText = content;
-      const oldStart = cursorRef.current.start;
-      const oldEnd = cursorRef.current.end;
       const lenDiff = newText.length - oldText.length;
 
-      // Single character insertion at cursor (typical typing)
-      if (lenDiff === 1 && oldStart === oldEnd) {
-        const insertedAt = oldStart;
-        const insertedChar = newText[insertedAt] ?? "";
-        const charAfterCursor = oldText[oldStart] ?? "";
+      // Only handle single-char insertions; otherwise just accept the new text.
+      if (lenDiff === 1) {
+        // Find first index where the texts differ
+        let diffPos = 0;
+        const minLen = Math.min(oldText.length, newText.length);
+        while (
+          diffPos < minLen &&
+          oldText.charCodeAt(diffPos) === newText.charCodeAt(diffPos)
+        ) {
+          diffPos++;
+        }
+        const insertedChar = newText[diffPos] ?? "";
+        const charAfterCursor = oldText[diffPos] ?? "";
 
-        // Smart enter: cursor is right before a closing pair char and user pressed Enter.
-        // Skip the line break, jump cursor past the closing char.
+        // Smart enter: \n inserted right before a closing pair char.
+        // Drop the newline and jump cursor past the closing char.
         if (insertedChar === "\n" && CLOSE_CHARS.has(charAfterCursor)) {
           setContent(oldText);
-          setCursor(oldStart + 1);
+          setCursor(diffPos + 1);
           return;
         }
 
         // Auto-pair: opening pair char typed -> insert matching close, cursor in between.
         if (PAIR_OPEN_TO_CLOSE[insertedChar]) {
-          // Don't auto-pair if next char is the same (avoid "" -> """")
           const closeChar = PAIR_OPEN_TO_CLOSE[insertedChar];
+          // Don't auto-pair if next char is already the same close char.
           if (charAfterCursor !== closeChar) {
             const updated =
-              newText.slice(0, insertedAt + 1) +
+              newText.slice(0, diffPos + 1) +
               closeChar +
-              newText.slice(insertedAt + 1);
+              newText.slice(diffPos + 1);
             setContent(updated);
-            setCursor(insertedAt + 1);
+            setCursor(diffPos + 1);
             return;
           }
         }
 
-        // Skip-over: typed a closing char that's already there
+        // Skip-over: typed a closing char that's already there.
         if (CLOSE_CHARS.has(insertedChar) && charAfterCursor === insertedChar) {
           setContent(oldText);
-          setCursor(oldStart + 1);
+          setCursor(diffPos + 1);
           return;
         }
       }
