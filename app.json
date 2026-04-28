@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "6fadd4fe-7380-483c-bf19-e50a049af2ec"
+      }
+    },
+    "android": {
+      "package": "com.xyrvok.workspace"
+    }
+  }
+}
