@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "Oox1ShPNZhY6LNStGcy9y"
+uri = "file://artifacts/scribe/assets/images/icon.png"
+type = "image"
+title = "scribe writer app icon"
