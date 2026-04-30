@@ -41,6 +41,14 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0a1d46f4-3718-4f4b-b315-e0f522e37196",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 3000
+    },
     "extra": {
       "eas": {
         "projectId": "0a1d46f4-3718-4f4b-b315-e0f522e37196"
