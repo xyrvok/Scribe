@@ -74,7 +74,12 @@ export function Menu() {
           </View>
 
           {activeNote ? (
-            <View style={[styles.statsBlock, { backgroundColor: c.background, borderColor: c.border }]}>
+            <View
+              style={[
+                styles.statsBlock,
+                { backgroundColor: c.background, borderColor: c.border },
+              ]}
+            >
               <View style={styles.statRow}>
                 <Text style={[styles.statLabel, { color: c.mutedText }]}>
                   Words
@@ -102,16 +107,14 @@ export function Menu() {
             </View>
           ) : null}
 
-          <SectionLabel>Themes</SectionLabel>
+          <SectionLabel>Quick theme</SectionLabel>
           {themes.map((t) => (
             <Pressable
               key={t.id}
               onPress={() => setActiveTheme(t.id)}
               style={({ pressed }) => [
                 styles.row,
-                {
-                  backgroundColor: pressed ? c.background : "transparent",
-                },
+                { backgroundColor: pressed ? c.background : "transparent" },
               ]}
             >
               <View
@@ -135,8 +138,7 @@ export function Menu() {
                   styles.rowLabel,
                   {
                     color: c.text,
-                    fontWeight:
-                      activeTheme.id === t.id ? "700" : "400",
+                    fontWeight: activeTheme.id === t.id ? "700" : "400",
                   },
                 ]}
                 numberOfLines={1}
@@ -149,34 +151,23 @@ export function Menu() {
             </Pressable>
           ))}
 
-          <SectionLabel>Customize</SectionLabel>
-          <MenuItem
-            icon="droplet"
-            label="Theme editor"
-            onPress={() => {
-              setLeftMenuOpen(false);
-              router.push("/themes");
-            }}
-          />
-          <MenuItem
-            icon="command"
-            label="Shortcut bar"
-            onPress={() => {
-              setLeftMenuOpen(false);
-              router.push("/shortcuts");
-            }}
-          />
+          <View style={{ height: 8 }} />
 
-          <SectionLabel>Workspace</SectionLabel>
           <MenuItem
-            icon="layers"
-            label={`Floating windows${floatingWindows.length > 0 ? ` (${floatingWindows.length})` : ""}`}
-            disabled={floatingWindows.length === 0}
-            rightLabel={floatingWindows.length > 0 ? "Close all" : undefined}
+            icon="settings"
+            label="Settings"
             onPress={() => {
-              if (floatingWindows.length > 0) closeAllFloating();
+              setLeftMenuOpen(false);
+              router.push("/settings");
             }}
           />
+          {floatingWindows.length > 0 ? (
+            <MenuItem
+              icon="layers"
+              label={`Close all floating (${floatingWindows.length})`}
+              onPress={() => closeAllFloating()}
+            />
+          ) : null}
           <MenuItem
             icon="info"
             label="About"
@@ -197,9 +188,7 @@ function SectionLabel({ children }: { children: string }) {
     <Text
       style={[
         styles.sectionLabel,
-        {
-          color: activeTheme.colors.mutedText,
-        },
+        { color: activeTheme.colors.mutedText },
       ]}
     >
       {children}

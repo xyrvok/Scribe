@@ -18,6 +18,7 @@ import { EdgeSwipeArea } from "@/components/EdgeSwipeArea";
 import { FloatingWindowsLayer } from "@/components/FloatingWindow";
 import { IconButton } from "@/components/IconButton";
 import { Menu } from "@/components/Menu";
+import { SearchOverlay } from "@/components/SearchOverlay";
 import { ShortcutBar } from "@/components/ShortcutBar";
 import { SidePanel } from "@/components/SidePanel";
 import { useNotes } from "@/contexts/NotesContext";
@@ -27,7 +28,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 export default function HomeScreen() {
   const { activeTheme } = useTheme();
   const { activeNote, renameNote, createNote } = useNotes();
-  const { toggleLeftMenu, toggleRightPanel } = usePanels();
+  const { toggleLeftMenu, toggleRightPanel, setSearchOpen } = usePanels();
   const insets = useSafeAreaInsets();
   const c = activeTheme.colors;
 
@@ -37,6 +38,7 @@ export default function HomeScreen() {
   const [titleDraft, setTitleDraft] = useState("");
   const [container, setContainer] = useState({ width: 0, height: 0 });
   const [zenMode, setZenMode] = useState(false);
+  const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false });
 
   useFocusEffect(
     useCallback(() => {
@@ -120,6 +122,11 @@ export default function HomeScreen() {
             )}
           </Pressable>
           <IconButton
+            icon="search"
+            onPress={() => setSearchOpen(true)}
+            accessibilityLabel="Search"
+          />
+          <IconButton
             icon="eye"
             onPress={() => setZenMode(true)}
             accessibilityLabel="Zen mode"
@@ -159,6 +166,7 @@ export default function HomeScreen() {
             onSelectionChange={() => {
               if (!editorFocused) setEditorFocused(true);
             }}
+            onUndoRedoChange={setUndoState}
           />
         ) : (
           <View style={styles.emptyState}>
@@ -175,6 +183,10 @@ export default function HomeScreen() {
         <ShortcutBar
           visible={!zenMode}
           onApply={(s) => editorRef.current?.applyShortcut(s)}
+          onUndo={() => editorRef.current?.undo()}
+          onRedo={() => editorRef.current?.redo()}
+          canUndo={undoState.canUndo}
+          canRedo={undoState.canRedo}
         />
       </KeyboardStickyView>
 
@@ -191,6 +203,9 @@ export default function HomeScreen() {
       {/* Drawers */}
       <Menu />
       <SidePanel />
+
+      {/* Search overlay */}
+      <SearchOverlay />
     </View>
   );
 }

@@ -54,6 +54,10 @@ function ThemedStack() {
           options={{ title: "Shortcut Bar", presentation: "card" }}
         />
         <Stack.Screen
+          name="settings"
+          options={{ title: "Settings", presentation: "card" }}
+        />
+        <Stack.Screen
           name="about"
           options={{ title: "About", presentation: "card" }}
         />

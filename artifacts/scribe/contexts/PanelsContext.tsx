@@ -10,6 +10,10 @@ import React, {
 
 const PINNED_KEY = "scribe.pinned.v1";
 const FLOATING_KEY = "scribe.floating.v1";
+const VIEW_MODE_KEY = "scribe.viewMode.v1";
+const WORD_COUNT_KEY = "scribe.showWordCount.v1";
+
+export type FileViewMode = "tree" | "list" | "folders";
 
 export type PinnedSlot = "top" | "bottom";
 
@@ -55,6 +59,18 @@ type PanelsContextValue = {
   updateFloating: (id: string, partial: Partial<FloatingWindow>) => void;
   bringToFront: (id: string) => void;
   closeAllFloating: () => void;
+
+  // Search overlay
+  searchOpen: boolean;
+  setSearchOpen: (v: boolean) => void;
+
+  // File browser view mode
+  viewMode: FileViewMode;
+  setViewMode: (m: FileViewMode) => void;
+
+  // Editor floating word count toggle
+  showWordCount: boolean;
+  setShowWordCount: (v: boolean) => void;
 };
 
 const PanelsContext = createContext<PanelsContextValue | null>(null);
@@ -64,23 +80,41 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const [leftMenuOpen, setLeftMenuOpen] = useState(false);
   const [pinned, setPinnedState] = useState<PinnedItem[]>([]);
   const [floatingWindows, setFloatingWindows] = useState<FloatingWindow[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [viewMode, setViewModeState] = useState<FileViewMode>("tree");
+  const [showWordCount, setShowWordCountState] = useState(true);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const [p, f] = await Promise.all([
+        const [p, f, vm, wc] = await Promise.all([
           AsyncStorage.getItem(PINNED_KEY),
           AsyncStorage.getItem(FLOATING_KEY),
+          AsyncStorage.getItem(VIEW_MODE_KEY),
+          AsyncStorage.getItem(WORD_COUNT_KEY),
         ]);
         if (p) setPinnedState(JSON.parse(p));
         if (f) setFloatingWindows(JSON.parse(f));
+        if (vm === "tree" || vm === "list" || vm === "folders")
+          setViewModeState(vm);
+        if (wc !== null) setShowWordCountState(wc === "1");
       } catch (err) {
         console.warn("Failed to load panels", err);
       } finally {
         setHydrated(true);
       }
     })();
+  }, []);
+
+  const setViewMode = useCallback((m: FileViewMode) => {
+    setViewModeState(m);
+    AsyncStorage.setItem(VIEW_MODE_KEY, m).catch(() => {});
+  }, []);
+
+  const setShowWordCount = useCallback((v: boolean) => {
+    setShowWordCountState(v);
+    AsyncStorage.setItem(WORD_COUNT_KEY, v ? "1" : "0").catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -181,6 +215,12 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       updateFloating,
       bringToFront,
       closeAllFloating,
+      searchOpen,
+      setSearchOpen,
+      viewMode,
+      setViewMode,
+      showWordCount,
+      setShowWordCount,
     }),
     [
       rightPanelOpen,
@@ -196,6 +236,11 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       updateFloating,
       bringToFront,
       closeAllFloating,
+      searchOpen,
+      viewMode,
+      setViewMode,
+      showWordCount,
+      setShowWordCount,
     ],
   );
 

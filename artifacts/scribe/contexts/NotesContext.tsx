@@ -8,7 +8,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Alert } from "react-native";
+import { Alert, AppState } from "react-native";
 
 import {
   createFile as safCreateFile,
@@ -17,6 +17,7 @@ import {
   isAndroidSafSupported,
   pickFolder,
   readFile as safReadFile,
+  readImageAsDataUri,
   scanFolderTree,
   writeFile as safWriteFile,
 } from "@/lib/safStorage";
@@ -166,6 +167,13 @@ type NotesContextValue = {
   disconnectExternalFolder: () => void;
   refreshExternalFolder: () => Promise<void>;
   isSafSupported: boolean;
+  // Cover images per folder path -> data: URI (or null if none/loading failed)
+  covers: Record<string, string | null>;
+  requestCover: (folderPath: string) => void;
+  // Lazy-load file content (used by search)
+  ensureLoaded: (id: string) => Promise<void>;
+  // Force-flush all pending disk writes immediately
+  flushPendingSaves: () => Promise<void>;
 };
 
 const NotesContext = createContext<NotesContextValue | null>(null);
@@ -180,6 +188,12 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   const [externalNotes, setExternalNotes] = useState<NoteFile[]>([]);
   const [externalFolders, setExternalFolders] = useState<FolderEntry[]>([]);
   const [externalLoading, setExternalLoading] = useState(false);
+
+  // Cover images: folderPath -> data URI (or null = none)
+  const [covers, setCovers] = useState<Record<string, string | null>>({});
+  // Map folderPath -> raw cover SAF uri & ext (set during scan)
+  const coverSourcesRef = useRef<Record<string, { uri: string; ext: string }>>({});
+  const coverInflightRef = useRef<Set<string>>(new Set());
 
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [vaultName, setVaultNameState] = useState<string>("My Vault");
@@ -281,17 +295,30 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
             externalUri: f.uri,
           })),
         ];
-        const noteEntries: NoteFile[] = tree.files.map((f) => ({
-          id: `ext::${f.uri}`,
-          name: f.name,
-          folderPath: f.folderPath,
-          ext: f.ext,
-          content: "",
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          externalUri: f.uri,
-          loaded: false,
-        }));
+        const noteEntries: NoteFile[] = tree.files.map((f) => {
+          const e = (f.ext || "").toLowerCase();
+          const ext: "md" | "txt" =
+            e === "md" || e === "mdown" || e === "markdown" ? "md" : "txt";
+          return {
+            id: `ext::${f.uri}`,
+            name: f.name,
+            folderPath: f.folderPath,
+            ext,
+            content: "",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            externalUri: f.uri,
+            loaded: false,
+          };
+        });
+        // Map covers per folder
+        const covSrc: Record<string, { uri: string; ext: string }> = {};
+        for (const cv of tree.covers) {
+          covSrc[cv.folderPath] = { uri: cv.uri, ext: cv.ext || "jpg" };
+        }
+        coverSourcesRef.current = covSrc;
+        // Reset cover state so prior data URIs aren't stale
+        setCovers({});
         setExternalFolders(folderEntries);
         setExternalNotes(noteEntries);
       } catch (err) {
@@ -334,30 +361,93 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     if (externalRoot) await loadExternalTree(externalRoot);
   }, [externalRoot, loadExternalTree]);
 
-  const setActiveNote = useCallback(
-    (id: string | null) => {
-      setActiveNoteId(id);
-      // Lazy-load external file content on open
-      if (id && isExternal) {
-        const note = externalNotes.find((n) => n.id === id);
-        if (note && note.externalUri && !note.loaded) {
-          safReadFile(note.externalUri)
-            .then((content) => {
-              setExternalNotes((prev) =>
-                prev.map((n) =>
-                  n.id === id ? { ...n, content, loaded: true } : n,
-                ),
-              );
-            })
-            .catch((err) => {
-              console.warn("Failed to read file", err);
-              Alert.alert("Read error", "Couldn't read this file from disk.");
-            });
-        }
+  const ensureLoaded = useCallback(
+    async (id: string): Promise<void> => {
+      if (!isExternal) return;
+      const note = externalNotes.find((n) => n.id === id);
+      if (!note || !note.externalUri || note.loaded) return;
+      try {
+        const content = await safReadFile(note.externalUri);
+        setExternalNotes((prev) =>
+          prev.map((n) =>
+            n.id === id ? { ...n, content, loaded: true } : n,
+          ),
+        );
+      } catch (err) {
+        console.warn("Failed to read file", err);
+        // Mark as loaded with empty content so we don't retry forever
+        setExternalNotes((prev) =>
+          prev.map((n) =>
+            n.id === id ? { ...n, loaded: true } : n,
+          ),
+        );
       }
     },
     [isExternal, externalNotes],
   );
+
+  const setActiveNote = useCallback(
+    (id: string | null) => {
+      setActiveNoteId(id);
+      if (id && isExternal) {
+        const note = externalNotes.find((n) => n.id === id);
+        if (note && note.externalUri && !note.loaded) {
+          ensureLoaded(id).catch((err) => {
+            console.warn("ensureLoaded failed", err);
+            Alert.alert("Read error", "Couldn't read this file from disk.");
+          });
+        }
+      }
+    },
+    [isExternal, externalNotes, ensureLoaded],
+  );
+
+  const requestCover = useCallback((folderPath: string) => {
+    if (covers[folderPath] !== undefined) return;
+    const src = coverSourcesRef.current[folderPath];
+    if (!src) {
+      setCovers((prev) => ({ ...prev, [folderPath]: null }));
+      return;
+    }
+    if (coverInflightRef.current.has(folderPath)) return;
+    coverInflightRef.current.add(folderPath);
+    readImageAsDataUri(src.uri, src.ext)
+      .then((dataUri) => {
+        setCovers((prev) => ({ ...prev, [folderPath]: dataUri }));
+      })
+      .finally(() => {
+        coverInflightRef.current.delete(folderPath);
+      });
+  }, [covers]);
+
+  const flushPendingSaves = useCallback(async (): Promise<void> => {
+    const ids = Object.keys(writeTimers.current);
+    if (ids.length === 0) return;
+    const writes: Promise<unknown>[] = [];
+    for (const id of ids) {
+      clearTimeout(writeTimers.current[id]);
+      delete writeTimers.current[id];
+      const note = externalNotes.find((n) => n.id === id);
+      if (note?.externalUri) {
+        writes.push(
+          safWriteFile(note.externalUri, note.content).catch((err) =>
+            console.warn("flush write failed", err),
+          ),
+        );
+      }
+    }
+    await Promise.all(writes);
+  }, [externalNotes]);
+
+  // Force-flush on background / inactive
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background" || state === "inactive") {
+        flushPendingSaves().catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, [flushPendingSaves]);
 
   const setVaultName = useCallback((name: string) => {
     setVaultNameState(name);
@@ -607,6 +697,10 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       disconnectExternalFolder,
       refreshExternalFolder,
       isSafSupported: safSupported,
+      covers,
+      requestCover,
+      ensureLoaded,
+      flushPendingSaves,
     }),
     [
       notes,
@@ -632,6 +726,10 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       disconnectExternalFolder,
       refreshExternalFolder,
       safSupported,
+      covers,
+      requestCover,
+      ensureLoaded,
+      flushPendingSaves,
     ],
   );
 

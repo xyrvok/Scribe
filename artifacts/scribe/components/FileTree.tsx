@@ -1,6 +1,8 @@
 import { Feather } from "@expo/vector-icons";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
+  Dimensions,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,6 +11,7 @@ import {
 } from "react-native";
 
 import { useNotes, type NoteFile } from "@/contexts/NotesContext";
+import { usePanels } from "@/contexts/PanelsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 
 type FileTreeProps = {
@@ -138,17 +141,193 @@ function TreeRow({
   );
 }
 
+function ListView({
+  notes,
+  activeNoteId,
+  onOpenNote,
+  onLongPressNote,
+}: {
+  notes: NoteFile[];
+  activeNoteId: string | null;
+  onOpenNote: (id: string) => void;
+  onLongPressNote: (id: string) => void;
+}) {
+  const { activeTheme } = useTheme();
+  const c = activeTheme.colors;
+  const sorted = useMemo(
+    () => [...notes].sort((a, b) => b.updatedAt - a.updatedAt),
+    [notes],
+  );
+  if (sorted.length === 0) {
+    return (
+      <View style={styles.emptyState}>
+        <Feather name="file-text" size={28} color={c.mutedText} />
+        <Text style={[styles.emptyText, { color: c.mutedText }]}>
+          No notes yet
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <>
+      {sorted.map((n) => {
+        const active = n.id === activeNoteId;
+        const preview = (n.content || "")
+          .replace(/[#>*_`]/g, "")
+          .replace(/\n+/g, " ")
+          .trim()
+          .slice(0, 80);
+        return (
+          <Pressable
+            key={n.id}
+            onPress={() => onOpenNote(n.id)}
+            onLongPress={() => onLongPressNote(n.id)}
+            style={({ pressed }) => [
+              styles.listItem,
+              {
+                borderBottomColor: c.border,
+                backgroundColor: pressed
+                  ? c.surface
+                  : active
+                    ? c.surface
+                    : "transparent",
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.listTitle,
+                { color: active ? c.accent : c.text },
+              ]}
+              numberOfLines={1}
+            >
+              {n.name}
+            </Text>
+            {preview ? (
+              <Text
+                style={[styles.listPreview, { color: c.mutedText }]}
+                numberOfLines={2}
+              >
+                {preview}
+              </Text>
+            ) : null}
+            <Text style={[styles.listMeta, { color: c.mutedText }]}>
+              {n.folderPath === "/" ? "Root" : n.folderPath} · .{n.ext}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </>
+  );
+}
+
+function FoldersView({
+  onOpenFolder,
+}: {
+  onOpenFolder: (path: string) => void;
+}) {
+  const {
+    folders,
+    notesInFolder,
+    childFolders,
+    covers,
+    requestCover,
+  } = useNotes();
+  const { activeTheme } = useTheme();
+  const c = activeTheme.colors;
+
+  const topLevel = useMemo(() => childFolders("/"), [childFolders, folders]);
+
+  // Lazy-request covers for visible folders
+  useEffect(() => {
+    topLevel.forEach((f) => {
+      if (covers[f.path] === undefined) requestCover(f.path);
+    });
+  }, [topLevel, covers, requestCover]);
+
+  const screenW = Dimensions.get("window").width;
+  const tileSize = Math.max(120, Math.min(160, screenW * 0.4));
+
+  if (topLevel.length === 0) {
+    return (
+      <View style={styles.emptyState}>
+        <Feather name="folder" size={28} color={c.mutedText} />
+        <Text style={[styles.emptyText, { color: c.mutedText }]}>
+          No subfolders here
+        </Text>
+        <Text style={[styles.emptyHint, { color: c.mutedText }]}>
+          Add a Cover.jpg in any folder to show its image here.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.gridWrap}>
+      {topLevel.map((f) => {
+        const cover = covers[f.path];
+        const noteCount = notesInFolder(f.path).length;
+        return (
+          <Pressable
+            key={f.path}
+            onPress={() => onOpenFolder(f.path)}
+            style={({ pressed }) => [
+              styles.tile,
+              {
+                width: tileSize,
+                backgroundColor: c.surface,
+                borderColor: c.border,
+                opacity: pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.tileImageWrap,
+                { height: tileSize * 0.75, backgroundColor: c.background },
+              ]}
+            >
+              {cover ? (
+                <Image
+                  source={{ uri: cover }}
+                  style={StyleSheet.absoluteFill}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Feather name="folder" size={32} color={c.mutedText} />
+              )}
+            </View>
+            <View style={styles.tileMeta}>
+              <Text
+                style={[styles.tileName, { color: c.text }]}
+                numberOfLines={1}
+              >
+                {f.path.split("/").filter(Boolean).pop()}
+              </Text>
+              <Text style={[styles.tileCount, { color: c.mutedText }]}>
+                {noteCount} note{noteCount === 1 ? "" : "s"}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function FileTree({
   onOpenNote,
   onLongPressNote,
   activeNoteId,
 }: FileTreeProps) {
-  const { notes, childFolders, vaultName } = useNotes();
+  const { notes, childFolders } = useNotes();
+  const { viewMode } = usePanels();
   const { activeTheme } = useTheme();
   const c = activeTheme.colors;
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(["/", "/Journal", "/Drafts"]),
   );
+  const [folderFilter, setFolderFilter] = useState<string | null>(null);
 
   const root: TreeNode[] = useMemo(
     () => buildTree("/", notes, childFolders),
@@ -164,50 +343,80 @@ export function FileTree({
     });
   };
 
+  const filteredNotes = useMemo(
+    () => (folderFilter ? notes.filter((n) => n.folderPath === folderFilter) : notes),
+    [folderFilter, notes],
+  );
+
   return (
     <ScrollView
       style={{ flex: 1 }}
-      contentContainerStyle={{ paddingVertical: 6 }}
+      contentContainerStyle={{ paddingVertical: 6, paddingBottom: 30 }}
       showsVerticalScrollIndicator={false}
     >
-      <View style={[styles.vaultHeader, { borderBottomColor: c.border }]}>
-        <Feather name="folder" size={14} color={c.accent} />
-        <Text style={[styles.vaultName, { color: c.text }]} numberOfLines={1}>
-          {vaultName}
-        </Text>
-      </View>
-      {root.map((node) => (
-        <TreeRow
-          key={node.path}
-          node={node}
-          depth={0}
-          expanded={expanded}
-          toggleExpand={toggleExpand}
-          onOpenNote={onOpenNote}
-          onLongPressNote={onLongPressNote}
-          activeNoteId={activeNoteId}
-        />
-      ))}
+      {viewMode === "tree" ? (
+        root.map((node) => (
+          <TreeRow
+            key={node.path}
+            node={node}
+            depth={0}
+            expanded={expanded}
+            toggleExpand={toggleExpand}
+            onOpenNote={onOpenNote}
+            onLongPressNote={onLongPressNote}
+            activeNoteId={activeNoteId}
+          />
+        ))
+      ) : viewMode === "list" ? (
+        <>
+          {folderFilter ? (
+            <Pressable
+              onPress={() => setFolderFilter(null)}
+              style={[styles.crumb, { borderBottomColor: c.border }]}
+            >
+              <Feather name="arrow-left" size={14} color={c.accent} />
+              <Text style={{ color: c.accent, fontSize: 13 }}>
+                Back to all notes
+              </Text>
+            </Pressable>
+          ) : null}
+          <ListView
+            notes={filteredNotes}
+            activeNoteId={activeNoteId}
+            onOpenNote={onOpenNote}
+            onLongPressNote={onLongPressNote}
+          />
+        </>
+      ) : (
+        <>
+          {folderFilter ? (
+            <>
+              <Pressable
+                onPress={() => setFolderFilter(null)}
+                style={[styles.crumb, { borderBottomColor: c.border }]}
+              >
+                <Feather name="arrow-left" size={14} color={c.accent} />
+                <Text style={{ color: c.accent, fontSize: 13 }}>
+                  Back to folders
+                </Text>
+              </Pressable>
+              <ListView
+                notes={filteredNotes}
+                activeNoteId={activeNoteId}
+                onOpenNote={onOpenNote}
+                onLongPressNote={onLongPressNote}
+              />
+            </>
+          ) : (
+            <FoldersView onOpenFolder={(p) => setFolderFilter(p)} />
+          )}
+        </>
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  vaultHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    marginBottom: 4,
-  },
-  vaultName: {
-    fontSize: 13,
-    fontWeight: "600",
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-  },
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -218,5 +427,75 @@ const styles = StyleSheet.create({
   rowText: {
     flex: 1,
     fontSize: 14,
+  },
+  listItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  listTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  listPreview: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  listMeta: {
+    fontSize: 10,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    marginTop: 2,
+  },
+  emptyState: {
+    paddingVertical: 40,
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 24,
+  },
+  emptyText: {
+    fontSize: 13,
+  },
+  emptyHint: {
+    fontSize: 11,
+    textAlign: "center",
+    lineHeight: 15,
+  },
+  gridWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: 10,
+    gap: 10,
+    justifyContent: "center",
+  },
+  tile: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  tileImageWrap: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tileMeta: {
+    padding: 8,
+    gap: 2,
+  },
+  tileName: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  tileCount: {
+    fontSize: 11,
+  },
+  crumb: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
 });

@@ -18,13 +18,17 @@ import { FileTree } from "@/components/FileTree";
 import { IconButton } from "@/components/IconButton";
 import { MarkdownView } from "@/components/MarkdownView";
 import { useNotes, type NoteFile } from "@/contexts/NotesContext";
-import { usePanels, type PinnedSlot } from "@/contexts/PanelsContext";
+import {
+  usePanels,
+  type FileViewMode,
+  type PinnedSlot,
+} from "@/contexts/PanelsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 
 type SidePanelTab = "files" | "pinned";
 
 export function SidePanel() {
-  const { rightPanelOpen, setRightPanelOpen } = usePanels();
+  const { rightPanelOpen, setRightPanelOpen, setSearchOpen } = usePanels();
   const { activeTheme } = useTheme();
   const insets = useSafeAreaInsets();
   const c = activeTheme.colors;
@@ -77,6 +81,15 @@ export function SidePanel() {
             onPress={() => setTab("pinned")}
           />
           <View style={{ flex: 1 }} />
+          <IconButton
+            icon="search"
+            size={32}
+            onPress={() => {
+              setSearchOpen(true);
+              setRightPanelOpen(false);
+            }}
+            accessibilityLabel="Search"
+          />
           <IconButton
             icon="x"
             size={32}
@@ -157,7 +170,7 @@ function FilesTab({ onLongPress }: { onLongPress: (id: string) => void }) {
     disconnectExternalFolder,
     refreshExternalFolder,
   } = useNotes();
-  const { setRightPanelOpen } = usePanels();
+  const { setRightPanelOpen, viewMode, setViewMode } = usePanels();
   const { activeTheme } = useTheme();
   const c = activeTheme.colors;
   const [folderInput, setFolderInput] = useState("");
@@ -263,6 +276,8 @@ function FilesTab({ onLongPress }: { onLongPress: (id: string) => void }) {
           onPress={() => setShowFolderInput((v) => !v)}
           accessibilityLabel="New folder"
         />
+        <View style={{ flex: 1 }} />
+        <ViewModeToggle value={viewMode} onChange={setViewMode} />
       </View>
       {showFolderInput ? (
         <View style={[styles.folderInputRow, { borderBottomColor: c.border }]}>
@@ -483,6 +498,53 @@ function NoteActionSheet({
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+function ViewModeToggle({
+  value,
+  onChange,
+}: {
+  value: FileViewMode;
+  onChange: (v: FileViewMode) => void;
+}) {
+  const { activeTheme } = useTheme();
+  const c = activeTheme.colors;
+  const opts: { v: FileViewMode; icon: React.ComponentProps<typeof Feather>["name"] }[] = [
+    { v: "tree", icon: "git-branch" },
+    { v: "list", icon: "list" },
+    { v: "folders", icon: "grid" },
+  ];
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
+        borderRadius: 8,
+        overflow: "hidden",
+      }}
+    >
+      {opts.map((o) => (
+        <Pressable
+          key={o.v}
+          onPress={() => onChange(o.v)}
+          style={({ pressed }) => ({
+            paddingHorizontal: 8,
+            paddingVertical: 6,
+            backgroundColor:
+              value === o.v ? c.accent + "22" : pressed ? c.background : "transparent",
+          })}
+          accessibilityLabel={`View ${o.v}`}
+        >
+          <Feather
+            name={o.icon}
+            size={14}
+            color={value === o.v ? c.accent : c.mutedText}
+          />
+        </Pressable>
+      ))}
+    </View>
   );
 }
 

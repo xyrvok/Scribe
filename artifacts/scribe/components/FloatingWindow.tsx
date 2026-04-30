@@ -16,7 +16,7 @@ import { usePanels, type FloatingWindow as FW } from "@/contexts/PanelsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 
 const MIN_WIDTH = 220;
-const MIN_HEIGHT = 160;
+const MIN_HEIGHT = 56;
 
 type FloatingWindowsProps = {
   containerWidth: number;
@@ -60,16 +60,28 @@ function SingleWindow({
   const pos = useRef({ x: win.x, y: win.y }).current;
   const size = useRef({ width: win.width, height: win.height }).current;
 
-  const translate = useRef(new Animated.ValueXY({ x: win.x, y: win.y })).current;
+  const translate = useRef(
+    new Animated.ValueXY({ x: win.x, y: win.y }),
+  ).current;
   const dim = useRef({
     width: new Animated.Value(win.width),
-    height: new Animated.Value(win.height),
+    height: new Animated.Value(win.collapsed ? MIN_HEIGHT : win.height),
   }).current;
+
+  // Keep animated dims in sync if win.collapsed changes externally
+  React.useEffect(() => {
+    Animated.timing(dim.height, {
+      toValue: win.collapsed ? MIN_HEIGHT : size.height,
+      duration: 180,
+      useNativeDriver: false,
+    }).start();
+  }, [win.collapsed, dim.height, size.height]);
 
   const dragResponder = useRef(
     PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_, g) =>
-        Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
+        Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
       onPanResponderGrant: () => {
         bringToFront(win.id);
       },
@@ -80,10 +92,7 @@ function SingleWindow({
           -size.width + 80,
           Math.min(screenW - 60, pos.x + g.dx),
         );
-        const ny = Math.max(
-          0,
-          Math.min(screenH - 60, pos.y + g.dy),
-        );
+        const ny = Math.max(0, Math.min(screenH - 60, pos.y + g.dy));
         translate.setValue({ x: nx, y: ny });
       },
       onPanResponderRelease: (_, g) => {
@@ -102,19 +111,20 @@ function SingleWindow({
 
   const resizeResponder = useRef(
     PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
         bringToFront(win.id);
       },
       onPanResponderMove: (_, g) => {
         const newW = Math.max(MIN_WIDTH, size.width + g.dx);
-        const newH = Math.max(MIN_HEIGHT, size.height + g.dy);
+        const newH = Math.max(160, size.height + g.dy);
         dim.width.setValue(newW);
         dim.height.setValue(newH);
       },
       onPanResponderRelease: (_, g) => {
         size.width = Math.max(MIN_WIDTH, size.width + g.dx);
-        size.height = Math.max(MIN_HEIGHT, size.height + g.dy);
+        size.height = Math.max(160, size.height + g.dy);
         dim.width.setValue(size.width);
         dim.height.setValue(size.height);
         updateFloating(win.id, { width: size.width, height: size.height });
@@ -123,6 +133,13 @@ function SingleWindow({
   ).current;
 
   if (!note) return null;
+
+  const handleToggleCollapse = () => {
+    bringToFront(win.id);
+    updateFloating(win.id, { collapsed: !win.collapsed });
+  };
+
+  const handleClose = () => closeFloating(win.id);
 
   return (
     <Animated.View
@@ -140,10 +157,17 @@ function SingleWindow({
       ]}
     >
       <View
-        {...dragResponder.panHandlers}
-        style={[styles.titleBar, { borderBottomColor: c.border, backgroundColor: c.toolbar }]}
+        style={[
+          styles.titleBar,
+          { borderBottomColor: c.border, backgroundColor: c.toolbar },
+        ]}
       >
-        <View style={styles.titleLeft}>
+        {/* Drag area: only the move icon + title text capture pan gestures */}
+        <View
+          {...dragResponder.panHandlers}
+          style={styles.dragArea}
+          collapsable={false}
+        >
           <Feather name="move" size={12} color={c.mutedText} />
           <Text
             style={[styles.title, { color: c.toolbarText }]}
@@ -152,53 +176,58 @@ function SingleWindow({
             {note.name}
           </Text>
         </View>
+        {/* Buttons live OUTSIDE the drag responder so taps register cleanly */}
         <Pressable
-          onPress={() =>
-            updateFloating(win.id, { collapsed: !win.collapsed })
-          }
-          hitSlop={8}
-          style={styles.titleBtn}
+          onPress={handleToggleCollapse}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.titleBtn,
+            { backgroundColor: pressed ? c.background : "transparent" },
+          ]}
         >
           <Feather
             name={win.collapsed ? "maximize-2" : "minimize-2"}
-            size={13}
-            color={c.mutedText}
+            size={14}
+            color={c.text}
           />
         </Pressable>
         <Pressable
-          onPress={() => closeFloating(win.id)}
-          hitSlop={8}
-          style={styles.titleBtn}
+          onPress={handleClose}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.titleBtn,
+            { backgroundColor: pressed ? c.background : "transparent" },
+          ]}
         >
-          <Feather name="x" size={14} color={c.mutedText} />
+          <Feather name="x" size={15} color={c.text} />
         </Pressable>
       </View>
 
       {!win.collapsed ? (
-        <View style={{ flex: 1 }}>
-          <MarkdownView
-            source={note.content}
-            theme={{
-              ...activeTheme,
-              fontSize: Math.max(13, activeTheme.fontSize - 3),
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-            }}
-          />
-        </View>
-      ) : null}
-
-      {!win.collapsed ? (
-        <View
-          {...resizeResponder.panHandlers}
-          style={[
-            styles.resizeHandle,
-            { backgroundColor: c.border },
-          ]}
-        >
-          <View style={[styles.resizeDot, { backgroundColor: c.mutedText }]} />
-          <View style={[styles.resizeDot, { backgroundColor: c.mutedText }]} />
-        </View>
+        <>
+          <View style={{ flex: 1 }}>
+            <MarkdownView
+              source={note.content}
+              theme={{
+                ...activeTheme,
+                fontSize: Math.max(13, activeTheme.fontSize - 3),
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+            />
+          </View>
+          <View
+            {...resizeResponder.panHandlers}
+            style={[styles.resizeHandle, { backgroundColor: c.border }]}
+          >
+            <View
+              style={[styles.resizeDot, { backgroundColor: c.mutedText }]}
+            />
+            <View
+              style={[styles.resizeDot, { backgroundColor: c.mutedText }]}
+            />
+          </View>
+        </>
       ) : null}
     </Animated.View>
   );
@@ -218,16 +247,18 @@ const styles = StyleSheet.create({
   titleBar: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 8,
+    gap: 4,
   },
-  titleLeft: {
+  dragArea: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
   },
   title: {
     fontSize: 13,
@@ -235,10 +266,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   titleBtn: {
-    width: 22,
-    height: 22,
+    width: 30,
+    height: 30,
     alignItems: "center",
     justifyContent: "center",
+    borderRadius: 6,
   },
   resizeHandle: {
     position: "absolute",

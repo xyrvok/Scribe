@@ -1,23 +1,29 @@
+import { Feather } from "@expo/vector-icons";
 import React, {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import {
   Platform,
-  ScrollView,
+  Pressable,
   StyleSheet,
+  Text,
   TextInput,
   type TextInputSelectionChangeEventData,
   View,
   type NativeSyntheticEvent,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 
 import { FONT_FAMILY_MAP } from "@/constants/defaultThemes";
 import { useNotes } from "@/contexts/NotesContext";
+import { usePanels } from "@/contexts/PanelsContext";
 import type { Shortcut } from "@/contexts/ShortcutsContext";
 import { useTheme } from "@/contexts/ThemeContext";
+import { countWords, readingTimeMinutes } from "@/lib/markdown";
 
 const PAIR_OPEN_TO_CLOSE: Record<string, string> = {
   '"': '"',
@@ -33,12 +39,20 @@ const PAIR_OPEN_TO_CLOSE: Record<string, string> = {
 
 const CLOSE_CHARS = new Set(Object.values(PAIR_OPEN_TO_CLOSE));
 
+const HISTORY_LIMIT = 200;
+const HISTORY_GROUP_MS = 700;
+
 type Selection = { start: number; end: number };
 
 export type EditorHandle = {
   applyShortcut: (s: Shortcut) => void;
   focus: () => void;
   insertText: (text: string) => void;
+  undo: () => void;
+  redo: () => void;
+  flush: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
 };
 
 type EditorProps = {
@@ -47,6 +61,7 @@ type EditorProps = {
   autoFocus?: boolean;
   onChangeContent?: (content: string) => void;
   onSelectionChange?: (sel: Selection) => void;
+  onUndoRedoChange?: (state: { canUndo: boolean; canRedo: boolean }) => void;
   registerHandle?: (h: EditorHandle | null) => void;
 };
 
@@ -56,13 +71,17 @@ export function Editor({
   autoFocus = false,
   onChangeContent,
   onSelectionChange,
+  onUndoRedoChange,
   registerHandle,
 }: EditorProps) {
   const { activeTheme } = useTheme();
   const { updateNoteContent } = useNotes();
+  const { showWordCount } = usePanels();
   const c = activeTheme.colors;
 
   const [content, setContent] = useState(initialContent);
+  const [savedTick, setSavedTick] = useState(0);
+  const [collapsedCount, setCollapsedCount] = useState(false);
   const cursorRef = useRef<Selection>({
     start: initialContent.length,
     end: initialContent.length,
@@ -71,6 +90,26 @@ export function Editor({
     undefined,
   );
   const inputRef = useRef<TextInput>(null);
+  const lastSavedRef = useRef<string>(initialContent);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Undo / redo history
+  const historyRef = useRef<{
+    past: string[];
+    future: string[];
+    lastChangeAt: number;
+  }>({
+    past: [],
+    future: [],
+    lastChangeAt: 0,
+  });
+
+  const notifyUndoRedo = useCallback(() => {
+    onUndoRedoChange?.({
+      canUndo: historyRef.current.past.length > 0,
+      canRedo: historyRef.current.future.length > 0,
+    });
+  }, [onUndoRedoChange]);
 
   // Reset content when note changes
   useEffect(() => {
@@ -79,16 +118,49 @@ export function Editor({
       start: initialContent.length,
       end: initialContent.length,
     };
-  }, [noteId, initialContent]);
+    historyRef.current = { past: [], future: [], lastChangeAt: 0 };
+    lastSavedRef.current = initialContent;
+    notifyUndoRedo();
+  }, [noteId, initialContent, notifyUndoRedo]);
 
-  // Persist content with debounce
-  useEffect(() => {
-    const t = setTimeout(() => {
+  // Force-save helper
+  const flushSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (lastSavedRef.current !== content) {
+      lastSavedRef.current = content;
       updateNoteContent(noteId, content);
       onChangeContent?.(content);
-    }, 250);
-    return () => clearTimeout(t);
+      setSavedTick((t) => t + 1);
+    }
   }, [content, noteId, updateNoteContent, onChangeContent]);
+
+  // Schedule debounced save on every content change (100ms)
+  useEffect(() => {
+    if (lastSavedRef.current === content) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      lastSavedRef.current = content;
+      updateNoteContent(noteId, content);
+      onChangeContent?.(content);
+      setSavedTick((t) => t + 1);
+    }, 120);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [content, noteId, updateNoteContent, onChangeContent]);
+
+  // Save when component unmounts or note id changes
+  useEffect(() => {
+    return () => {
+      if (lastSavedRef.current !== content) {
+        updateNoteContent(noteId, content);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noteId]);
 
   // Clear forced selection after one render cycle
   useEffect(() => {
@@ -110,14 +182,30 @@ export function Editor({
     setForcedSelection({ start: position, end: position });
   }, []);
 
+  const pushHistory = useCallback(
+    (prev: string) => {
+      const now = Date.now();
+      const h = historyRef.current;
+      const grouped =
+        h.past.length > 0 && now - h.lastChangeAt < HISTORY_GROUP_MS;
+      if (!grouped) {
+        h.past.push(prev);
+        if (h.past.length > HISTORY_LIMIT) h.past.shift();
+      }
+      h.future = [];
+      h.lastChangeAt = now;
+      notifyUndoRedo();
+    },
+    [notifyUndoRedo],
+  );
+
   const handleChangeText = useCallback(
     (newText: string) => {
       const oldText = content;
       const lenDiff = newText.length - oldText.length;
 
-      // Only handle single-char insertions; otherwise just accept the new text.
+      // Single-char insertion: smart pair / smart enter / skip-over
       if (lenDiff === 1) {
-        // Find first index where the texts differ
         let diffPos = 0;
         const minLen = Math.min(oldText.length, newText.length);
         while (
@@ -129,19 +217,17 @@ export function Editor({
         const insertedChar = newText[diffPos] ?? "";
         const charAfterCursor = oldText[diffPos] ?? "";
 
-        // Smart enter: \n inserted right before a closing pair char.
-        // Drop the newline and jump cursor past the closing char.
+        // Smart enter
         if (insertedChar === "\n" && CLOSE_CHARS.has(charAfterCursor)) {
           setContent(oldText);
           setCursor(diffPos + 1);
           return;
         }
-
-        // Auto-pair: opening pair char typed -> insert matching close, cursor in between.
+        // Auto-pair
         if (PAIR_OPEN_TO_CLOSE[insertedChar]) {
           const closeChar = PAIR_OPEN_TO_CLOSE[insertedChar];
-          // Don't auto-pair if next char is already the same close char.
           if (charAfterCursor !== closeChar) {
+            pushHistory(oldText);
             const updated =
               newText.slice(0, diffPos + 1) +
               closeChar +
@@ -151,8 +237,7 @@ export function Editor({
             return;
           }
         }
-
-        // Skip-over: typed a closing char that's already there.
+        // Skip-over
         if (CLOSE_CHARS.has(insertedChar) && charAfterCursor === insertedChar) {
           setContent(oldText);
           setCursor(diffPos + 1);
@@ -160,9 +245,10 @@ export function Editor({
         }
       }
 
+      pushHistory(oldText);
       setContent(newText);
     },
-    [content, setCursor],
+    [content, setCursor, pushHistory],
   );
 
   const applyShortcut = useCallback(
@@ -173,14 +259,15 @@ export function Editor({
       const middle = content.slice(start, end);
       const after = content.slice(end);
 
+      pushHistory(content);
+
       if (s.kind === "insert") {
         const updated = before + s.payload + after;
         setContent(updated);
         setCursor(start + s.payload.length);
         return;
       }
-
-      if (s.kind === "wrap") {
+      if (s.kind === "wrap" || s.kind === "pair") {
         const open = s.payload;
         const close = s.closing ?? s.payload;
         if (middle.length > 0) {
@@ -192,25 +279,9 @@ export function Editor({
           setContent(updated);
           setCursor(start + open.length);
         }
-        return;
-      }
-
-      if (s.kind === "pair") {
-        const open = s.payload;
-        const close = s.closing ?? s.payload;
-        if (middle.length > 0) {
-          const updated = before + open + middle + close + after;
-          setContent(updated);
-          setCursor(end + open.length + close.length);
-        } else {
-          const updated = before + open + close + after;
-          setContent(updated);
-          setCursor(start + open.length);
-        }
-        return;
       }
     },
-    [content, setCursor],
+    [content, setCursor, pushHistory],
   );
 
   const focus = useCallback(() => {
@@ -221,74 +292,163 @@ export function Editor({
     (text: string) => {
       const start = cursorRef.current.start;
       const end = cursorRef.current.end;
+      pushHistory(content);
       const updated = content.slice(0, start) + text + content.slice(end);
       setContent(updated);
       setCursor(start + text.length);
     },
-    [content, setCursor],
+    [content, setCursor, pushHistory],
   );
+
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    if (h.past.length === 0) return;
+    const prev = h.past.pop()!;
+    h.future.push(content);
+    if (h.future.length > HISTORY_LIMIT) h.future.shift();
+    setContent(prev);
+    setCursor(prev.length);
+    notifyUndoRedo();
+  }, [content, setCursor, notifyUndoRedo]);
+
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    if (h.future.length === 0) return;
+    const next = h.future.pop()!;
+    h.past.push(content);
+    if (h.past.length > HISTORY_LIMIT) h.past.shift();
+    setContent(next);
+    setCursor(next.length);
+    notifyUndoRedo();
+  }, [content, setCursor, notifyUndoRedo]);
 
   // Expose handle to parent
   useEffect(() => {
-    registerHandle?.({ applyShortcut, focus, insertText });
+    registerHandle?.({
+      applyShortcut,
+      focus,
+      insertText,
+      undo,
+      redo,
+      flush: flushSave,
+      canUndo: () => historyRef.current.past.length > 0,
+      canRedo: () => historyRef.current.future.length > 0,
+    });
     return () => registerHandle?.(null);
-  }, [registerHandle, applyShortcut, focus, insertText]);
+  }, [registerHandle, applyShortcut, focus, insertText, undo, redo, flushSave]);
 
   const fontFamily = FONT_FAMILY_MAP[activeTheme.fontFamily];
   const lineHeightPx = activeTheme.fontSize * activeTheme.lineHeight;
 
+  const stats = useMemo(
+    () => ({
+      words: countWords(content),
+      chars: content.length,
+      mins: readingTimeMinutes(content),
+    }),
+    [content],
+  );
+
   return (
-    <ScrollView
-      style={[styles.scroll, { backgroundColor: c.background }]}
-      contentContainerStyle={[
-        styles.scrollContent,
-        {
-          paddingHorizontal: activeTheme.paddingHorizontal,
-          paddingVertical: activeTheme.paddingVertical,
-        },
-      ]}
-      keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="interactive"
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={{ width: "100%", maxWidth: activeTheme.maxWidth, alignSelf: "center" }}>
-        <TextInput
-          ref={inputRef}
-          value={content}
-          onChangeText={handleChangeText}
-          onSelectionChange={handleSelectionChange}
-          selection={forcedSelection}
-          autoFocus={autoFocus}
-          multiline
-          textAlignVertical="top"
-          autoCorrect
-          autoCapitalize="sentences"
-          spellCheck
-          placeholder="Begin writing…"
-          placeholderTextColor={c.mutedText}
-          selectionColor={c.selection}
-          underlineColorAndroid="transparent"
-          scrollEnabled={false}
+    <View style={{ flex: 1, backgroundColor: c.background }}>
+      <KeyboardAwareScrollView
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingHorizontal: activeTheme.paddingHorizontal,
+            paddingVertical: activeTheme.paddingVertical,
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        showsVerticalScrollIndicator={false}
+        bottomOffset={120}
+      >
+        <View
+          style={{
+            width: "100%",
+            maxWidth: activeTheme.maxWidth,
+            alignSelf: "center",
+          }}
+        >
+          <TextInput
+            ref={inputRef}
+            value={content}
+            onChangeText={handleChangeText}
+            onSelectionChange={handleSelectionChange}
+            selection={forcedSelection}
+            autoFocus={autoFocus}
+            multiline
+            textAlignVertical="top"
+            autoCorrect
+            autoCapitalize="sentences"
+            spellCheck
+            placeholder="Begin writing…"
+            placeholderTextColor={c.mutedText}
+            selectionColor={c.selection}
+            underlineColorAndroid="transparent"
+            scrollEnabled={false}
+            style={[
+              styles.input,
+              {
+                color: c.text,
+                fontFamily,
+                fontSize: activeTheme.fontSize,
+                lineHeight: lineHeightPx,
+                letterSpacing: activeTheme.letterSpacing,
+                minHeight: 400,
+                ...(Platform.OS === "web"
+                  ? ({
+                      outlineWidth: 0,
+                      outlineStyle: "none",
+                    } as object)
+                  : {}),
+              },
+            ]}
+          />
+        </View>
+      </KeyboardAwareScrollView>
+
+      {/* Floating word count */}
+      {showWordCount && !collapsedCount ? (
+        <Pressable
+          onPress={() => setCollapsedCount(true)}
           style={[
-            styles.input,
+            styles.wordCount,
             {
-              color: c.text,
-              fontFamily,
-              fontSize: activeTheme.fontSize,
-              lineHeight: lineHeightPx,
-              letterSpacing: activeTheme.letterSpacing,
-              minHeight: 400,
-              ...(Platform.OS === "web"
-                ? ({
-                    outlineWidth: 0,
-                    outlineStyle: "none",
-                  } as object)
-                : {}),
+              backgroundColor: c.surface,
+              borderColor: c.border,
             },
           ]}
-        />
-      </View>
-    </ScrollView>
+        >
+          <Feather name="edit-2" size={10} color={c.mutedText} />
+          <Text style={[styles.wordCountText, { color: c.text }]}>
+            {stats.words.toLocaleString()} words
+          </Text>
+          <Text style={[styles.wordCountMuted, { color: c.mutedText }]}>
+            · {stats.chars.toLocaleString()} ch · {stats.mins} min
+          </Text>
+          {savedTick > 0 ? (
+            <View
+              style={[styles.savedDot, { backgroundColor: c.accent }]}
+            />
+          ) : null}
+        </Pressable>
+      ) : showWordCount && collapsedCount ? (
+        <Pressable
+          onPress={() => setCollapsedCount(false)}
+          style={[
+            styles.wordCountTiny,
+            { backgroundColor: c.surface, borderColor: c.border },
+          ]}
+        >
+          <Text style={[styles.wordCountText, { color: c.mutedText }]}>
+            {stats.words}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -298,11 +458,52 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    paddingBottom: 80,
   },
   input: {
     width: "100%",
     padding: 0,
     margin: 0,
     borderWidth: 0,
+  },
+  wordCount: {
+    position: "absolute",
+    bottom: 12,
+    right: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  wordCountTiny: {
+    position: "absolute",
+    bottom: 12,
+    right: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    opacity: 0.7,
+  },
+  wordCountText: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  wordCountMuted: {
+    fontSize: 10,
+  },
+  savedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginLeft: 2,
   },
 });

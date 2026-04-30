@@ -9,9 +9,20 @@ import { useTheme } from "@/contexts/ThemeContext";
 type ShortcutBarProps = {
   onApply: (shortcut: Shortcut) => void;
   visible: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
 };
 
-export function ShortcutBar({ onApply, visible }: ShortcutBarProps) {
+export function ShortcutBar({
+  onApply,
+  visible,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
+}: ShortcutBarProps) {
   const { shortcuts } = useShortcuts();
   const { activeTheme } = useTheme();
   const router = useRouter();
@@ -23,10 +34,7 @@ export function ShortcutBar({ onApply, visible }: ShortcutBarProps) {
     <View
       style={[
         styles.bar,
-        {
-          backgroundColor: c.toolbar,
-          borderTopColor: c.border,
-        },
+        { backgroundColor: c.toolbar, borderTopColor: c.border },
       ]}
     >
       <ScrollView
@@ -35,6 +43,52 @@ export function ShortcutBar({ onApply, visible }: ShortcutBarProps) {
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="always"
       >
+        {onUndo ? (
+          <Pressable
+            onPress={onUndo}
+            disabled={!canUndo}
+            style={({ pressed }) => [
+              styles.btn,
+              {
+                backgroundColor: pressed ? c.surface : "transparent",
+                borderColor: c.border,
+                opacity: canUndo ? 1 : 0.35,
+                minWidth: 40,
+              },
+            ]}
+            accessibilityLabel="Undo"
+          >
+            <Feather name="rotate-ccw" size={16} color={c.toolbarText} />
+          </Pressable>
+        ) : null}
+        {onRedo ? (
+          <Pressable
+            onPress={onRedo}
+            disabled={!canRedo}
+            style={({ pressed }) => [
+              styles.btn,
+              {
+                backgroundColor: pressed ? c.surface : "transparent",
+                borderColor: c.border,
+                opacity: canRedo ? 1 : 0.35,
+                minWidth: 40,
+              },
+            ]}
+            accessibilityLabel="Redo"
+          >
+            <Feather name="rotate-cw" size={16} color={c.toolbarText} />
+          </Pressable>
+        ) : null}
+        {onUndo || onRedo ? (
+          <View
+            style={{
+              width: StyleSheet.hairlineWidth,
+              alignSelf: "stretch",
+              backgroundColor: c.border,
+              marginHorizontal: 4,
+            }}
+          />
+        ) : null}
         {shortcuts.map((s) => (
           <Pressable
             key={s.id}
@@ -48,10 +102,7 @@ export function ShortcutBar({ onApply, visible }: ShortcutBarProps) {
             ]}
           >
             <Text
-              style={[
-                styles.btnText,
-                { color: c.toolbarText },
-              ]}
+              style={[styles.btnText, { color: c.toolbarText }]}
               numberOfLines={1}
             >
               {s.label}
