@@ -18,6 +18,7 @@ import {
   type FileViewMode,
 } from "@/contexts/PanelsContext";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useWritingStats } from "@/contexts/WritingStatsContext";
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -37,6 +38,14 @@ export default function SettingsScreen() {
     viewMode,
     setViewMode,
   } = usePanels();
+  const {
+    dailyGoal,
+    setDailyGoal,
+    todayWords,
+    currentStreak,
+    longestStreak,
+  } = useWritingStats();
+  const [goalDraft, setGoalDraft] = useState(String(dailyGoal));
   const c = activeTheme.colors;
 
   const [vaultDraft, setVaultDraft] = useState(vaultName);
@@ -304,6 +313,68 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
             ))}
+          </View>
+        </View>
+      </Section>
+
+      <Section label="Writing goals">
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.surface, borderColor: c.border },
+          ]}
+        >
+          <Text style={[styles.cardLabel, { color: c.text }]}>
+            Daily word goal
+          </Text>
+          <Text style={[styles.cardSub, { color: c.mutedText }]}>
+            {todayWords.toLocaleString()} / {dailyGoal.toLocaleString()} words
+            today
+          </Text>
+          <View style={{ height: 10 }} />
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <TextInput
+              value={goalDraft}
+              onChangeText={setGoalDraft}
+              keyboardType="number-pad"
+              placeholder="500"
+              placeholderTextColor={c.mutedText}
+              style={[
+                styles.input,
+                { color: c.text, borderColor: c.border },
+              ]}
+              onSubmitEditing={() => {
+                const n = parseInt(goalDraft, 10);
+                if (!Number.isNaN(n) && n > 0) setDailyGoal(n);
+              }}
+            />
+            <ActionBtn
+              icon="check"
+              label="Save"
+              onPress={() => {
+                const n = parseInt(goalDraft, 10);
+                if (!Number.isNaN(n) && n > 0) setDailyGoal(n);
+              }}
+            />
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.surface, borderColor: c.border },
+          ]}
+        >
+          <View style={styles.rowBetween}>
+            <Text style={{ fontSize: 22 }}>🔥</Text>
+            <View style={{ flex: 1, paddingLeft: 10 }}>
+              <Text style={[styles.cardLabel, { color: c.text }]}>
+                {currentStreak} day{currentStreak === 1 ? "" : "s"} streak
+              </Text>
+              <Text style={[styles.cardSub, { color: c.mutedText }]}>
+                Best: {longestStreak} day{longestStreak === 1 ? "" : "s"}
+              </Text>
+            </View>
           </View>
         </View>
       </Section>

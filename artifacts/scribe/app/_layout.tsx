@@ -26,6 +26,7 @@ import { NotesProvider } from "@/contexts/NotesContext";
 import { PanelsProvider } from "@/contexts/PanelsContext";
 import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
 import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
+import { WritingStatsProvider } from "@/contexts/WritingStatsContext";
 
 function ThemedStack() {
   const { activeTheme } = useTheme();
@@ -92,7 +93,9 @@ export default function RootLayout() {
             <NotesProvider>
               <ShortcutsProvider>
                 <PanelsProvider>
-                  <ThemedStack />
+                  <WritingStatsProvider>
+                    <ThemedStack />
+                  </WritingStatsProvider>
                 </PanelsProvider>
               </ShortcutsProvider>
             </NotesProvider>

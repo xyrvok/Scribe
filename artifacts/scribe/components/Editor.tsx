@@ -7,6 +7,7 @@ import React, {
   useState,
 } from "react";
 import {
+  Animated,
   Platform,
   Pressable,
   StyleSheet,
@@ -24,6 +25,8 @@ import { usePanels } from "@/contexts/PanelsContext";
 import type { Shortcut } from "@/contexts/ShortcutsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { countWords, readingTimeMinutes } from "@/lib/markdown";
+import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { useWritingStats } from "@/contexts/WritingStatsContext";
 
 const PAIR_OPEN_TO_CLOSE: Record<string, string> = {
   '"': '"',
@@ -77,11 +80,17 @@ export function Editor({
   const { activeTheme } = useTheme();
   const { updateNoteContent } = useNotes();
   const { showWordCount } = usePanels();
+  const { dailyGoal, todayWords, goalReached, recordWordDelta } =
+    useWritingStats();
   const c = activeTheme.colors;
 
   const [content, setContent] = useState(initialContent);
   const [savedTick, setSavedTick] = useState(0);
   const [collapsedCount, setCollapsedCount] = useState(false);
+  const [previewMode, setPreviewMode] = useState(false);
+  const lastWordCountRef = useRef(countWords(initialContent));
+  const goalCelebratedRef = useRef(false);
+  const goalPulse = useRef(new Animated.Value(0)).current;
   const cursorRef = useRef<Selection>({
     start: initialContent.length,
     end: initialContent.length,
@@ -120,8 +129,20 @@ export function Editor({
     };
     historyRef.current = { past: [], future: [], lastChangeAt: 0 };
     lastSavedRef.current = initialContent;
+    lastWordCountRef.current = countWords(initialContent);
     notifyUndoRedo();
   }, [noteId, initialContent, notifyUndoRedo]);
+
+  // Track net word-count delta against the writing-stats tracker (goal + streak)
+  const applyWordDelta = useCallback(
+    (savedContent: string) => {
+      const newCount = countWords(savedContent);
+      const delta = newCount - lastWordCountRef.current;
+      lastWordCountRef.current = newCount;
+      recordWordDelta(delta);
+    },
+    [recordWordDelta],
+  );
 
   // Force-save helper
   const flushSave = useCallback(() => {
@@ -134,8 +155,9 @@ export function Editor({
       updateNoteContent(noteId, content);
       onChangeContent?.(content);
       setSavedTick((t) => t + 1);
+      applyWordDelta(content);
     }
-  }, [content, noteId, updateNoteContent, onChangeContent]);
+  }, [content, noteId, updateNoteContent, onChangeContent, applyWordDelta]);
 
   // Schedule debounced save on every content change (100ms)
   useEffect(() => {
@@ -146,11 +168,12 @@ export function Editor({
       updateNoteContent(noteId, content);
       onChangeContent?.(content);
       setSavedTick((t) => t + 1);
+      applyWordDelta(content);
     }, 120);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [content, noteId, updateNoteContent, onChangeContent]);
+  }, [content, noteId, updateNoteContent, onChangeContent, applyWordDelta]);
 
   // Save when component unmounts or note id changes
   useEffect(() => {
@@ -349,8 +372,46 @@ export function Editor({
     [content],
   );
 
+  const goalProgress = dailyGoal > 0 ? Math.min(1, todayWords / dailyGoal) : 0;
+
+  useEffect(() => {
+    if (goalReached && !goalCelebratedRef.current) {
+      goalCelebratedRef.current = true;
+      Animated.sequence([
+        Animated.timing(goalPulse, {
+          toValue: 1,
+          duration: 220,
+          useNativeDriver: false,
+        }),
+        Animated.timing(goalPulse, {
+          toValue: 0,
+          duration: 420,
+          useNativeDriver: false,
+        }),
+      ]).start();
+    }
+    if (!goalReached) goalCelebratedRef.current = false;
+  }, [goalReached, goalPulse]);
+
+  const goalBarHeight = goalPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [3, 6],
+  });
+
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
+      <View style={[styles.goalTrack, { backgroundColor: c.border }]}>
+        <Animated.View
+          style={[
+            styles.goalFill,
+            {
+              width: `${goalProgress * 100}%`,
+              height: goalBarHeight,
+              backgroundColor: goalReached ? "#22c55e" : c.accent,
+            },
+          ]}
+        />
+      </View>
       <KeyboardAwareScrollView
         style={styles.scroll}
         contentContainerStyle={[
@@ -372,43 +433,74 @@ export function Editor({
             alignSelf: "center",
           }}
         >
-          <TextInput
-            ref={inputRef}
-            value={content}
-            onChangeText={handleChangeText}
-            onSelectionChange={handleSelectionChange}
-            selection={forcedSelection}
-            autoFocus={autoFocus}
-            multiline
-            textAlignVertical="top"
-            autoCorrect
-            autoCapitalize="sentences"
-            spellCheck
-            placeholder="Begin writing…"
-            placeholderTextColor={c.mutedText}
-            selectionColor={c.selection}
-            underlineColorAndroid="transparent"
-            scrollEnabled={false}
-            style={[
-              styles.input,
-              {
-                color: c.text,
-                fontFamily,
-                fontSize: activeTheme.fontSize,
-                lineHeight: lineHeightPx,
-                letterSpacing: activeTheme.letterSpacing,
-                minHeight: 400,
-                ...(Platform.OS === "web"
-                  ? ({
-                      outlineWidth: 0,
-                      outlineStyle: "none",
-                    } as object)
-                  : {}),
-              },
-            ]}
-          />
+          {previewMode ? (
+            <Pressable onPress={() => setPreviewMode(false)}>
+              <MarkdownPreview
+                content={content}
+                textColor={c.text}
+                mutedColor={c.mutedText}
+                accentColor={c.accent}
+                fontFamily={fontFamily}
+                fontSize={activeTheme.fontSize}
+                lineHeight={activeTheme.lineHeight}
+                letterSpacing={activeTheme.letterSpacing}
+              />
+            </Pressable>
+          ) : (
+            <TextInput
+              ref={inputRef}
+              value={content}
+              onChangeText={handleChangeText}
+              onSelectionChange={handleSelectionChange}
+              selection={forcedSelection}
+              autoFocus={autoFocus}
+              multiline
+              textAlignVertical="top"
+              autoCorrect
+              autoCapitalize="sentences"
+              spellCheck
+              placeholder="Begin writing…"
+              placeholderTextColor={c.mutedText}
+              selectionColor={c.selection}
+              underlineColorAndroid="transparent"
+              scrollEnabled={false}
+              style={[
+                styles.input,
+                {
+                  color: c.text,
+                  fontFamily,
+                  fontSize: activeTheme.fontSize,
+                  lineHeight: lineHeightPx,
+                  letterSpacing: activeTheme.letterSpacing,
+                  minHeight: 400,
+                  ...(Platform.OS === "web"
+                    ? ({
+                        outlineWidth: 0,
+                        outlineStyle: "none",
+                      } as object)
+                    : {}),
+                },
+              ]}
+            />
+          )}
         </View>
       </KeyboardAwareScrollView>
+
+      {/* Write / Read mode toggle */}
+      <Pressable
+        onPress={() => setPreviewMode((p) => !p)}
+        style={[
+          styles.previewToggle,
+          { backgroundColor: c.surface, borderColor: c.border },
+        ]}
+        accessibilityLabel={previewMode ? "Switch to write mode" : "Switch to preview mode"}
+      >
+        <Feather
+          name={previewMode ? "edit-3" : "eye"}
+          size={14}
+          color={c.text}
+        />
+      </Pressable>
 
       {/* Floating word count */}
       {showWordCount && !collapsedCount ? (
@@ -453,6 +545,14 @@ export function Editor({
 }
 
 const styles = StyleSheet.create({
+  goalTrack: {
+    width: "100%",
+    height: 3,
+    overflow: "visible",
+  },
+  goalFill: {
+    borderRadius: 3,
+  },
   scroll: {
     flex: 1,
   },
@@ -465,6 +565,22 @@ const styles = StyleSheet.create({
     padding: 0,
     margin: 0,
     borderWidth: 0,
+  },
+  previewToggle: {
+    position: "absolute",
+    top: 10,
+    right: 12,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
   },
   wordCount: {
     position: "absolute",

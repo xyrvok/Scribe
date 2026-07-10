@@ -288,9 +288,25 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       setExternalLoading(true);
       try {
         const tree = await scanFolderTree(root.uri);
+        // Hide folders that contain no text/markdown files anywhere in their
+        // subtree (directly or via descendants) — an empty folder tree is
+        // just noise in the explorer.
+        const pathsWithFiles = new Set<string>();
+        for (const f of tree.files) {
+          let p = f.folderPath;
+          while (true) {
+            pathsWithFiles.add(p);
+            if (p === "/" || !p.includes("/")) break;
+            const idx = p.lastIndexOf("/");
+            p = idx <= 0 ? "/" : p.slice(0, idx);
+          }
+        }
+        const nonEmptyFolders = tree.folders.filter((f) =>
+          pathsWithFiles.has(f.relativePath),
+        );
         const folderEntries: FolderEntry[] = [
           { path: "/", externalUri: root.uri },
-          ...tree.folders.map((f) => ({
+          ...nonEmptyFolders.map((f) => ({
             path: f.relativePath,
             externalUri: f.uri,
           })),
