@@ -12,6 +12,7 @@ const PINNED_KEY = "scribe.pinned.v1";
 const FLOATING_KEY = "scribe.floating.v1";
 const VIEW_MODE_KEY = "scribe.viewMode.v1";
 const WORD_COUNT_KEY = "scribe.showWordCount.v1";
+const TYPEWRITER_KEY = "scribe.typewriterMode.v1";
 
 export type FileViewMode = "tree" | "list" | "folders";
 
@@ -71,6 +72,10 @@ type PanelsContextValue = {
   // Editor floating word count toggle
   showWordCount: boolean;
   setShowWordCount: (v: boolean) => void;
+
+  // Typewriter scroll (keeps cursor line centered)
+  typewriterMode: boolean;
+  setTypewriterMode: (v: boolean) => void;
 };
 
 const PanelsContext = createContext<PanelsContextValue | null>(null);
@@ -83,22 +88,25 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [viewMode, setViewModeState] = useState<FileViewMode>("tree");
   const [showWordCount, setShowWordCountState] = useState(true);
+  const [typewriterMode, setTypewriterModeState] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const [p, f, vm, wc] = await Promise.all([
+        const [p, f, vm, wc, tw] = await Promise.all([
           AsyncStorage.getItem(PINNED_KEY),
           AsyncStorage.getItem(FLOATING_KEY),
           AsyncStorage.getItem(VIEW_MODE_KEY),
           AsyncStorage.getItem(WORD_COUNT_KEY),
+          AsyncStorage.getItem(TYPEWRITER_KEY),
         ]);
         if (p) setPinnedState(JSON.parse(p));
         if (f) setFloatingWindows(JSON.parse(f));
         if (vm === "tree" || vm === "list" || vm === "folders")
           setViewModeState(vm);
         if (wc !== null) setShowWordCountState(wc === "1");
+        if (tw !== null) setTypewriterModeState(tw === "1");
       } catch (err) {
         console.warn("Failed to load panels", err);
       } finally {
@@ -115,6 +123,11 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const setShowWordCount = useCallback((v: boolean) => {
     setShowWordCountState(v);
     AsyncStorage.setItem(WORD_COUNT_KEY, v ? "1" : "0").catch(() => {});
+  }, []);
+
+  const setTypewriterMode = useCallback((v: boolean) => {
+    setTypewriterModeState(v);
+    AsyncStorage.setItem(TYPEWRITER_KEY, v ? "1" : "0").catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -221,6 +234,8 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setViewMode,
       showWordCount,
       setShowWordCount,
+      typewriterMode,
+      setTypewriterMode,
     }),
     [
       rightPanelOpen,
@@ -241,6 +256,8 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setViewMode,
       showWordCount,
       setShowWordCount,
+      typewriterMode,
+      setTypewriterMode,
     ],
   );
 

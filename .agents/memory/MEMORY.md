@@ -1,0 +1,1 @@
+- [Scribe app conventions](scribe-app.md) — Expo app patterns: Context-per-feature, safStorage persistence, expo-haptics for feedback, manual OOXML/EPUB export.

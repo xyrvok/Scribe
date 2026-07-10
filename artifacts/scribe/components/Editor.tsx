@@ -27,6 +27,13 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { countWords, readingTimeMinutes } from "@/lib/markdown";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { useWritingStats } from "@/contexts/WritingStatsContext";
+import {
+  clearRecoveryBuffer,
+  getRecoveryBuffer,
+  saveRecoveryBuffer,
+} from "@/lib/recovery";
+import { maybeSnapshot } from "@/lib/history";
+import { FindReplaceBar, type FindMatch } from "@/components/FindReplaceBar";
 
 const PAIR_OPEN_TO_CLOSE: Record<string, string> = {
   '"': '"',
@@ -56,6 +63,7 @@ export type EditorHandle = {
   flush: () => void;
   canUndo: () => boolean;
   canRedo: () => boolean;
+  toggleFindReplace: () => void;
 };
 
 type EditorProps = {
@@ -79,7 +87,7 @@ export function Editor({
 }: EditorProps) {
   const { activeTheme } = useTheme();
   const { updateNoteContent } = useNotes();
-  const { showWordCount } = usePanels();
+  const { showWordCount, typewriterMode } = usePanels();
   const { dailyGoal, todayWords, goalReached, recordWordDelta } =
     useWritingStats();
   const c = activeTheme.colors;
@@ -88,6 +96,10 @@ export function Editor({
   const [savedTick, setSavedTick] = useState(0);
   const [collapsedCount, setCollapsedCount] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
+  const [findReplaceOpen, setFindReplaceOpen] = useState(false);
+  const [recoveryOffer, setRecoveryOffer] = useState<string | null>(null);
+  const scrollRef = useRef<any>(null);
+  const scrollViewHeightRef = useRef(0);
   const lastWordCountRef = useRef(countWords(initialContent));
   const goalCelebratedRef = useRef(false);
   const goalPulse = useRef(new Animated.Value(0)).current;
@@ -131,7 +143,24 @@ export function Editor({
     lastSavedRef.current = initialContent;
     lastWordCountRef.current = countWords(initialContent);
     notifyUndoRedo();
+    setFindReplaceOpen(false);
+    setRecoveryOffer(null);
+
+    getRecoveryBuffer(noteId).then((buf) => {
+      if (buf && buf.content !== initialContent && buf.content.trim().length > 0) {
+        setRecoveryOffer(buf.content);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId, initialContent, notifyUndoRedo]);
+
+  // Continuously persist a crash-recovery buffer as the user types
+  useEffect(() => {
+    const t = setTimeout(() => {
+      saveRecoveryBuffer(noteId, content).catch(() => {});
+    }, 800);
+    return () => clearTimeout(t);
+  }, [noteId, content]);
 
   // Track net word-count delta against the writing-stats tracker (goal + streak)
   const applyWordDelta = useCallback(
@@ -156,6 +185,7 @@ export function Editor({
       onChangeContent?.(content);
       setSavedTick((t) => t + 1);
       applyWordDelta(content);
+      maybeSnapshot(noteId, content).catch(() => {});
     }
   }, [content, noteId, updateNoteContent, onChangeContent, applyWordDelta]);
 
@@ -169,6 +199,7 @@ export function Editor({
       onChangeContent?.(content);
       setSavedTick((t) => t + 1);
       applyWordDelta(content);
+      maybeSnapshot(noteId, content).catch(() => {});
     }, 120);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -196,8 +227,20 @@ export function Editor({
     (e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
       cursorRef.current = e.nativeEvent.selection;
       onSelectionChange?.(e.nativeEvent.selection);
+
+      if (typewriterMode && scrollRef.current) {
+        const pos = e.nativeEvent.selection.start;
+        const lineIndex = content.slice(0, pos).split("\n").length - 1;
+        const lineHeightPx = activeTheme.fontSize * activeTheme.lineHeight;
+        const lineY = lineIndex * lineHeightPx + activeTheme.paddingVertical;
+        const targetY = Math.max(
+          0,
+          lineY - scrollViewHeightRef.current / 2 + lineHeightPx / 2,
+        );
+        scrollRef.current.scrollTo({ y: targetY, animated: true });
+      }
     },
-    [onSelectionChange],
+    [onSelectionChange, typewriterMode, content, activeTheme],
   );
 
   const setCursor = useCallback((position: number) => {
@@ -345,6 +388,10 @@ export function Editor({
     notifyUndoRedo();
   }, [content, setCursor, notifyUndoRedo]);
 
+  const toggleFindReplace = useCallback(() => {
+    setFindReplaceOpen((v) => !v);
+  }, []);
+
   // Expose handle to parent
   useEffect(() => {
     registerHandle?.({
@@ -356,9 +403,65 @@ export function Editor({
       flush: flushSave,
       canUndo: () => historyRef.current.past.length > 0,
       canRedo: () => historyRef.current.future.length > 0,
+      toggleFindReplace,
     });
     return () => registerHandle?.(null);
-  }, [registerHandle, applyShortcut, focus, insertText, undo, redo, flushSave]);
+  }, [
+    registerHandle,
+    applyShortcut,
+    focus,
+    insertText,
+    undo,
+    redo,
+    flushSave,
+    toggleFindReplace,
+  ]);
+
+  const handleFindJump = useCallback((match: FindMatch) => {
+    cursorRef.current = { start: match.start, end: match.end };
+    setForcedSelection({ start: match.start, end: match.end });
+  }, []);
+
+  const handleReplaceOne = useCallback(
+    (match: FindMatch, replacement: string) => {
+      pushHistory(content);
+      const updated =
+        content.slice(0, match.start) + replacement + content.slice(match.end);
+      setContent(updated);
+      const pos = match.start + replacement.length;
+      setCursor(pos);
+    },
+    [content, pushHistory, setCursor],
+  );
+
+  const handleReplaceAll = useCallback(
+    (query: string, replacement: string, caseSensitive: boolean): number => {
+      if (!query) return 0;
+      const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(escapeRe(query), "g" + (caseSensitive ? "" : "i"));
+      const matches = content.match(re);
+      if (!matches || matches.length === 0) return 0;
+      pushHistory(content);
+      const updated = content.replace(re, replacement);
+      setContent(updated);
+      return matches.length;
+    },
+    [content, pushHistory],
+  );
+
+  const acceptRecovery = useCallback(() => {
+    if (recoveryOffer === null) return;
+    pushHistory(content);
+    setContent(recoveryOffer);
+    setCursor(recoveryOffer.length);
+    setRecoveryOffer(null);
+    clearRecoveryBuffer(noteId).catch(() => {});
+  }, [recoveryOffer, content, pushHistory, setCursor, noteId]);
+
+  const dismissRecovery = useCallback(() => {
+    setRecoveryOffer(null);
+    clearRecoveryBuffer(noteId).catch(() => {});
+  }, [noteId]);
 
   const fontFamily = FONT_FAMILY_MAP[activeTheme.fontFamily];
   const lineHeightPx = activeTheme.fontSize * activeTheme.lineHeight;
@@ -412,15 +515,52 @@ export function Editor({
           ]}
         />
       </View>
+      {findReplaceOpen ? (
+        <FindReplaceBar
+          content={content}
+          onClose={() => setFindReplaceOpen(false)}
+          onJump={handleFindJump}
+          onReplaceOne={handleReplaceOne}
+          onReplaceAll={handleReplaceAll}
+        />
+      ) : null}
+
+      {recoveryOffer !== null ? (
+        <View
+          style={[
+            styles.recoveryBanner,
+            { backgroundColor: c.surface, borderColor: c.accent },
+          ]}
+        >
+          <Feather name="alert-triangle" size={14} color={c.accent} />
+          <Text style={[styles.recoveryText, { color: c.text }]} numberOfLines={2}>
+            We found unsaved changes from before. Restore them?
+          </Text>
+          <Pressable onPress={acceptRecovery} hitSlop={6}>
+            <Text style={[styles.recoveryAction, { color: c.accent }]}>
+              Restore
+            </Text>
+          </Pressable>
+          <Pressable onPress={dismissRecovery} hitSlop={6}>
+            <Feather name="x" size={16} color={c.mutedText} />
+          </Pressable>
+        </View>
+      ) : null}
+
       <KeyboardAwareScrollView
+        ref={scrollRef}
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
           {
             paddingHorizontal: activeTheme.paddingHorizontal,
             paddingVertical: activeTheme.paddingVertical,
+            paddingBottom: typewriterMode ? 300 : 80,
           },
         ]}
+        onLayout={(e) => {
+          scrollViewHeightRef.current = e.nativeEvent.layout.height;
+        }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
         showsVerticalScrollIndicator={false}
@@ -621,5 +761,33 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     marginLeft: 2,
+  },
+  recoveryBanner: {
+    position: "absolute",
+    top: 10,
+    left: 12,
+    right: 50,
+    zIndex: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  recoveryText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  recoveryAction: {
+    fontSize: 12,
+    fontWeight: "700",
   },
 });

@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -45,7 +46,10 @@ export function ShortcutBar({
       >
         {onUndo ? (
           <Pressable
-            onPress={onUndo}
+            onPress={() => {
+              if (canUndo) Haptics.selectionAsync();
+              onUndo();
+            }}
             disabled={!canUndo}
             style={({ pressed }) => [
               styles.btn,
@@ -63,7 +67,10 @@ export function ShortcutBar({
         ) : null}
         {onRedo ? (
           <Pressable
-            onPress={onRedo}
+            onPress={() => {
+              if (canRedo) Haptics.selectionAsync();
+              onRedo();
+            }}
             disabled={!canRedo}
             style={({ pressed }) => [
               styles.btn,
@@ -92,7 +99,10 @@ export function ShortcutBar({
         {shortcuts.map((s) => (
           <Pressable
             key={s.id}
-            onPress={() => onApply(s)}
+            onPress={() => {
+              Haptics.selectionAsync();
+              onApply(s);
+            }}
             style={({ pressed }) => [
               styles.btn,
               {

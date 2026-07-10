@@ -161,6 +161,27 @@ export function Menu() {
               router.push("/settings");
             }}
           />
+          <MenuItem
+            icon="users"
+            label="Characters & Locations"
+            onPress={() => {
+              setLeftMenuOpen(false);
+              router.push("/sheets");
+            }}
+          />
+          {activeNote ? (
+            <MenuItem
+              icon="clock"
+              label="Version history"
+              onPress={() => {
+                setLeftMenuOpen(false);
+                router.push({
+                  pathname: "/history",
+                  params: { noteId: activeNote.id },
+                });
+              }}
+            />
+          ) : null}
           {floatingWindows.length > 0 ? (
             <MenuItem
               icon="layers"

@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Haptics from "expo-haptics";
 import React, {
   createContext,
   useCallback,
@@ -150,7 +151,11 @@ export function WritingStatsProvider({
   const goalReached = todayWords >= dailyGoal;
 
   useEffect(() => {
-    if (goalReached) celebratedRef.current = true;
+    if (goalReached && !celebratedRef.current) {
+      celebratedRef.current = true;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+    if (!goalReached) celebratedRef.current = false;
   }, [goalReached]);
 
   const value = useMemo<WritingStatsValue>(

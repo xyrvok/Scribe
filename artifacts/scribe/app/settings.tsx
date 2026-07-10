@@ -35,6 +35,8 @@ export default function SettingsScreen() {
   const {
     showWordCount,
     setShowWordCount,
+    typewriterMode,
+    setTypewriterMode,
     viewMode,
     setViewMode,
   } = usePanels();
@@ -249,6 +251,30 @@ export default function SettingsScreen() {
               value={showWordCount}
               onValueChange={setShowWordCount}
               thumbColor={showWordCount ? c.accent : undefined}
+              trackColor={{ true: c.accent + "55", false: c.border }}
+            />
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.surface, borderColor: c.border },
+          ]}
+        >
+          <View style={styles.rowBetween}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.cardLabel, { color: c.text }]}>
+                Typewriter scrolling
+              </Text>
+              <Text style={[styles.cardSub, { color: c.mutedText }]}>
+                Keeps your cursor line centered as you type.
+              </Text>
+            </View>
+            <Switch
+              value={typewriterMode}
+              onValueChange={setTypewriterMode}
+              thumbColor={typewriterMode ? c.accent : undefined}
               trackColor={{ true: c.accent + "55", false: c.border }}
             />
           </View>

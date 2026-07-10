@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Editor, type EditorHandle } from "@/components/Editor";
 import { EdgeSwipeArea } from "@/components/EdgeSwipeArea";
+import { ExportSheet } from "@/components/ExportSheet";
 import { FloatingWindowsLayer } from "@/components/FloatingWindow";
 import { IconButton } from "@/components/IconButton";
 import { Menu } from "@/components/Menu";
@@ -39,6 +40,7 @@ export default function HomeScreen() {
   const [container, setContainer] = useState({ width: 0, height: 0 });
   const [zenMode, setZenMode] = useState(false);
   const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false });
+  const [exportOpen, setExportOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -127,6 +129,17 @@ export default function HomeScreen() {
             accessibilityLabel="Search"
           />
           <IconButton
+            icon="edit-2"
+            onPress={() => editorRef.current?.toggleFindReplace()}
+            accessibilityLabel="Find and replace in note"
+          />
+          <IconButton
+            icon="share"
+            onPress={() => setExportOpen(true)}
+            accessibilityLabel="Export"
+            disabled={!activeNote}
+          />
+          <IconButton
             icon="eye"
             onPress={() => setZenMode(true)}
             accessibilityLabel="Zen mode"
@@ -206,6 +219,12 @@ export default function HomeScreen() {
 
       {/* Search overlay */}
       <SearchOverlay />
+
+      <ExportSheet
+        visible={exportOpen}
+        note={activeNote}
+        onClose={() => setExportOpen(false)}
+      />
     </View>
   );
 }

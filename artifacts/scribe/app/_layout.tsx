@@ -22,6 +22,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { CharactersProvider } from "@/contexts/CharactersContext";
 import { NotesProvider } from "@/contexts/NotesContext";
 import { PanelsProvider } from "@/contexts/PanelsContext";
 import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
@@ -59,6 +60,14 @@ function ThemedStack() {
           options={{ title: "Settings", presentation: "card" }}
         />
         <Stack.Screen
+          name="sheets"
+          options={{ title: "Characters & Locations", presentation: "card" }}
+        />
+        <Stack.Screen
+          name="history"
+          options={{ title: "Version History", presentation: "card" }}
+        />
+        <Stack.Screen
           name="about"
           options={{ title: "About", presentation: "card" }}
         />
@@ -94,7 +103,9 @@ export default function RootLayout() {
               <ShortcutsProvider>
                 <PanelsProvider>
                   <WritingStatsProvider>
-                    <ThemedStack />
+                    <CharactersProvider>
+                      <ThemedStack />
+                    </CharactersProvider>
                   </WritingStatsProvider>
                 </PanelsProvider>
               </ShortcutsProvider>

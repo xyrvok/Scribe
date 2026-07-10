@@ -60,6 +60,9 @@
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
     "@expo-google-fonts/playfair-display": "^0.4.2",
     "expo-file-system": "^19.0.22",
-    "expo-updates": "~29.0.17"
+    "expo-print": "^15.0.8",
+    "expo-sharing": "^14.0.8",
+    "expo-updates": "~29.0.17",
+    "jszip": "^3.10.1"
   }
 }
