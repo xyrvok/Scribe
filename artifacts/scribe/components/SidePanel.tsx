@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -14,9 +15,11 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ExportSheet } from "@/components/ExportSheet";
 import { FileTree } from "@/components/FileTree";
 import { IconButton } from "@/components/IconButton";
 import { MarkdownView } from "@/components/MarkdownView";
+import { ProjectsView } from "@/components/ProjectsView";
 import { useNotes, type NoteFile } from "@/contexts/NotesContext";
 import {
   usePanels,
@@ -25,10 +28,11 @@ import {
 } from "@/contexts/PanelsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 
-type SidePanelTab = "files" | "pinned";
+type SidePanelTab = "files" | "pinned" | "projects";
 
 export function SidePanel() {
   const { rightPanelOpen, setRightPanelOpen, setSearchOpen } = usePanels();
+  const { setActiveNote } = useNotes();
   const { activeTheme } = useTheme();
   const insets = useSafeAreaInsets();
   const c = activeTheme.colors;
@@ -80,6 +84,12 @@ export function SidePanel() {
             active={tab === "pinned"}
             onPress={() => setTab("pinned")}
           />
+          <PanelTab
+            label="Projects"
+            icon="book"
+            active={tab === "projects"}
+            onPress={() => setTab("projects")}
+          />
           <View style={{ flex: 1 }} />
           <IconButton
             icon="search"
@@ -99,8 +109,16 @@ export function SidePanel() {
 
         {tab === "files" ? (
           <FilesTab onLongPress={(id) => setActionNoteId(id)} />
-        ) : (
+        ) : tab === "pinned" ? (
           <PinnedTab />
+        ) : (
+          <ProjectsView
+            onOpenNote={(id) => {
+              setActiveNote(id);
+              setRightPanelOpen(false);
+            }}
+            onClose={() => setRightPanelOpen(false)}
+          />
         )}
       </Animated.View>
 
@@ -424,80 +442,110 @@ function NoteActionSheet({
   const { notes, setActiveNote, deleteNote } = useNotes();
   const { setPinned, openFloating, setRightPanelOpen } = usePanels();
   const { activeTheme } = useTheme();
+  const router = useRouter();
   const c = activeTheme.colors;
   const note = noteId ? notes.find((n) => n.id === noteId) : null;
   const visible = !!note;
+  const [exportNote, setExportNote] = useState<NoteFile | null>(null);
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
-      <Pressable style={styles.actionBackdrop} onPress={onClose}>
-        <Pressable
-          style={[
-            styles.actionSheet,
-            {
-              backgroundColor: c.surface,
-              borderColor: c.border,
-            },
-          ]}
-        >
-          <Text style={[styles.actionTitle, { color: c.text }]}>
-            {note?.name}
-          </Text>
-          <ActionRow
-            icon="edit-3"
-            label="Open in editor"
-            onPress={() => {
-              if (!note) return;
-              setActiveNote(note.id);
-              setRightPanelOpen(false);
-              onClose();
-            }}
-          />
-          <ActionRow
-            icon="copy"
-            label="Open in floating window"
-            onPress={() => {
-              if (!note) return;
-              openFloating(note.id);
-              onClose();
-            }}
-          />
-          <ActionRow
-            icon="bookmark"
-            label="Pin to top of right side"
-            onPress={() => {
-              if (!note) return;
-              setPinned("top", note.id);
-              onClose();
-            }}
-          />
-          <ActionRow
-            icon="bookmark"
-            label="Pin to bottom of right side"
-            onPress={() => {
-              if (!note) return;
-              setPinned("bottom", note.id);
-              onClose();
-            }}
-          />
-          <ActionRow
-            icon="trash-2"
-            label="Delete"
-            destructive
-            onPress={() => {
-              if (!note) return;
-              deleteNote(note.id);
-              onClose();
-            }}
-          />
+    <>
+      <Modal
+        visible={visible}
+        transparent
+        animationType="fade"
+        onRequestClose={onClose}
+      >
+        <Pressable style={styles.actionBackdrop} onPress={onClose}>
+          <Pressable
+            style={[
+              styles.actionSheet,
+              {
+                backgroundColor: c.surface,
+                borderColor: c.border,
+              },
+            ]}
+          >
+            <Text style={[styles.actionTitle, { color: c.text }]}>
+              {note?.name}
+            </Text>
+            <ActionRow
+              icon="edit-3"
+              label="Open in editor"
+              onPress={() => {
+                if (!note) return;
+                setActiveNote(note.id);
+                setRightPanelOpen(false);
+                onClose();
+              }}
+            />
+            <ActionRow
+              icon="copy"
+              label="Open in floating window"
+              onPress={() => {
+                if (!note) return;
+                openFloating(note.id);
+                onClose();
+              }}
+            />
+            <ActionRow
+              icon="clock"
+              label="Version history"
+              onPress={() => {
+                if (!note) return;
+                setActiveNote(note.id);
+                setRightPanelOpen(false);
+                onClose();
+                router.push("/history");
+              }}
+            />
+            <ActionRow
+              icon="share"
+              label="Export file"
+              onPress={() => {
+                if (!note) return;
+                onClose();
+                setExportNote(note);
+              }}
+            />
+            <ActionRow
+              icon="bookmark"
+              label="Pin to top of right side"
+              onPress={() => {
+                if (!note) return;
+                setPinned("top", note.id);
+                onClose();
+              }}
+            />
+            <ActionRow
+              icon="bookmark"
+              label="Pin to bottom of right side"
+              onPress={() => {
+                if (!note) return;
+                setPinned("bottom", note.id);
+                onClose();
+              }}
+            />
+            <ActionRow
+              icon="trash-2"
+              label="Delete"
+              destructive
+              onPress={() => {
+                if (!note) return;
+                deleteNote(note.id);
+                onClose();
+              }}
+            />
+          </Pressable>
         </Pressable>
-      </Pressable>
-    </Modal>
+      </Modal>
+
+      <ExportSheet
+        visible={exportNote !== null}
+        note={exportNote}
+        onClose={() => setExportNote(null)}
+      />
+    </>
   );
 }
 

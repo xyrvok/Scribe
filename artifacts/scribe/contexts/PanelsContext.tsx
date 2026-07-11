@@ -13,8 +13,18 @@ const FLOATING_KEY = "scribe.floating.v1";
 const VIEW_MODE_KEY = "scribe.viewMode.v1";
 const WORD_COUNT_KEY = "scribe.showWordCount.v1";
 const TYPEWRITER_KEY = "scribe.typewriterMode.v1";
+const LINE_SPACING_KEY = "scribe.lineSpacing.v1";
+const EDITOR_FONT_SIZE_KEY = "scribe.editorFontSize.v1";
 
-export type FileViewMode = "tree" | "list" | "folders";
+export type LineSpacing = "compact" | "comfortable" | "spacious";
+export const LINE_SPACING_MAP: Record<LineSpacing, number> = {
+  compact: 1.4,
+  comfortable: 1.7,
+  spacious: 2.0,
+};
+export const DEFAULT_EDITOR_FONT_SIZE = 16;
+
+export type FileViewMode = "tree" | "list" | "folders" | "projects";
 
 export type PinnedSlot = "top" | "bottom";
 
@@ -76,6 +86,14 @@ type PanelsContextValue = {
   // Typewriter scroll (keeps cursor line centered)
   typewriterMode: boolean;
   setTypewriterMode: (v: boolean) => void;
+
+  // Line spacing override (compact / comfortable / spacious)
+  lineSpacing: LineSpacing;
+  setLineSpacing: (v: LineSpacing) => void;
+
+  // Editor font size override (14–22 px)
+  editorFontSize: number;
+  setEditorFontSize: (v: number) => void;
 };
 
 const PanelsContext = createContext<PanelsContextValue | null>(null);
@@ -89,24 +107,34 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const [viewMode, setViewModeState] = useState<FileViewMode>("tree");
   const [showWordCount, setShowWordCountState] = useState(true);
   const [typewriterMode, setTypewriterModeState] = useState(false);
+  const [lineSpacing, setLineSpacingState] = useState<LineSpacing>("comfortable");
+  const [editorFontSize, setEditorFontSizeState] = useState(DEFAULT_EDITOR_FONT_SIZE);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const [p, f, vm, wc, tw] = await Promise.all([
+        const [p, f, vm, wc, tw, ls, fs] = await Promise.all([
           AsyncStorage.getItem(PINNED_KEY),
           AsyncStorage.getItem(FLOATING_KEY),
           AsyncStorage.getItem(VIEW_MODE_KEY),
           AsyncStorage.getItem(WORD_COUNT_KEY),
           AsyncStorage.getItem(TYPEWRITER_KEY),
+          AsyncStorage.getItem(LINE_SPACING_KEY),
+          AsyncStorage.getItem(EDITOR_FONT_SIZE_KEY),
         ]);
         if (p) setPinnedState(JSON.parse(p));
         if (f) setFloatingWindows(JSON.parse(f));
-        if (vm === "tree" || vm === "list" || vm === "folders")
+        if (vm === "tree" || vm === "list" || vm === "folders" || vm === "projects")
           setViewModeState(vm);
         if (wc !== null) setShowWordCountState(wc === "1");
         if (tw !== null) setTypewriterModeState(tw === "1");
+        if (ls === "compact" || ls === "comfortable" || ls === "spacious")
+          setLineSpacingState(ls);
+        if (fs !== null) {
+          const n = Number(fs);
+          if (n >= 14 && n <= 22) setEditorFontSizeState(n);
+        }
       } catch (err) {
         console.warn("Failed to load panels", err);
       } finally {
@@ -128,6 +156,16 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const setTypewriterMode = useCallback((v: boolean) => {
     setTypewriterModeState(v);
     AsyncStorage.setItem(TYPEWRITER_KEY, v ? "1" : "0").catch(() => {});
+  }, []);
+
+  const setLineSpacing = useCallback((v: LineSpacing) => {
+    setLineSpacingState(v);
+    AsyncStorage.setItem(LINE_SPACING_KEY, v).catch(() => {});
+  }, []);
+
+  const setEditorFontSize = useCallback((v: number) => {
+    setEditorFontSizeState(v);
+    AsyncStorage.setItem(EDITOR_FONT_SIZE_KEY, String(v)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -236,6 +274,10 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setShowWordCount,
       typewriterMode,
       setTypewriterMode,
+      lineSpacing,
+      setLineSpacing,
+      editorFontSize,
+      setEditorFontSize,
     }),
     [
       rightPanelOpen,
@@ -258,6 +300,10 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setShowWordCount,
       typewriterMode,
       setTypewriterMode,
+      lineSpacing,
+      setLineSpacing,
+      editorFontSize,
+      setEditorFontSize,
     ],
   );
 

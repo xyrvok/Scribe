@@ -23,6 +23,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { CharactersProvider } from "@/contexts/CharactersContext";
+import { NovelProjectsProvider } from "@/contexts/NovelProjectsContext";
 import { NotesProvider } from "@/contexts/NotesContext";
 import { PanelsProvider } from "@/contexts/PanelsContext";
 import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
@@ -104,7 +105,9 @@ export default function RootLayout() {
                 <PanelsProvider>
                   <WritingStatsProvider>
                     <CharactersProvider>
-                      <ThemedStack />
+                      <NovelProjectsProvider>
+                        <ThemedStack />
+                      </NovelProjectsProvider>
                     </CharactersProvider>
                   </WritingStatsProvider>
                 </PanelsProvider>

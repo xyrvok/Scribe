@@ -14,8 +14,10 @@ import {
 
 import { useNotes } from "@/contexts/NotesContext";
 import {
+  DEFAULT_EDITOR_FONT_SIZE,
   usePanels,
   type FileViewMode,
+  type LineSpacing,
 } from "@/contexts/PanelsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useWritingStats } from "@/contexts/WritingStatsContext";
@@ -39,6 +41,10 @@ export default function SettingsScreen() {
     setTypewriterMode,
     viewMode,
     setViewMode,
+    lineSpacing,
+    setLineSpacing,
+    editorFontSize,
+    setEditorFontSize,
   } = usePanels();
   const {
     dailyGoal,
@@ -277,6 +283,151 @@ export default function SettingsScreen() {
               thumbColor={typewriterMode ? c.accent : undefined}
               trackColor={{ true: c.accent + "55", false: c.border }}
             />
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.surface, borderColor: c.border },
+          ]}
+        >
+          <Text style={[styles.cardLabel, { color: c.text }]}>
+            Line spacing
+          </Text>
+          <Text style={[styles.cardSub, { color: c.mutedText }]}>
+            Controls the space between lines in the editor.
+          </Text>
+          <View style={{ height: 10 }} />
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            {(
+              [
+                { v: "compact", label: "Compact" },
+                { v: "comfortable", label: "Comfortable" },
+                { v: "spacious", label: "Spacious" },
+              ] as { v: LineSpacing; label: string }[]
+            ).map((o) => (
+              <Pressable
+                key={o.v}
+                onPress={() => setLineSpacing(o.v)}
+                style={({ pressed }) => [
+                  styles.segBtn,
+                  {
+                    flex: 1,
+                    backgroundColor:
+                      lineSpacing === o.v
+                        ? c.accent
+                        : pressed
+                          ? c.background
+                          : "transparent",
+                    borderColor: lineSpacing === o.v ? c.accent : c.border,
+                  },
+                ]}
+              >
+                <Text
+                  style={{
+                    color: lineSpacing === o.v ? c.toolbar : c.text,
+                    fontWeight: "600",
+                    fontSize: 12,
+                    textAlign: "center",
+                  }}
+                >
+                  {o.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.surface, borderColor: c.border },
+          ]}
+        >
+          <Text style={[styles.cardLabel, { color: c.text }]}>
+            Font size — {editorFontSize}px
+          </Text>
+          <Text style={[styles.cardSub, { color: c.mutedText }]}>
+            Editor text size (14–22 px).
+          </Text>
+          <View style={{ height: 10 }} />
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <Pressable
+              onPress={() =>
+                setEditorFontSize(Math.max(14, editorFontSize - 1))
+              }
+              style={({ pressed }) => [
+                styles.segBtn,
+                {
+                  width: 40,
+                  backgroundColor: pressed ? c.background : "transparent",
+                  borderColor: c.border,
+                },
+              ]}
+              accessibilityLabel="Decrease font size"
+            >
+              <Text style={{ color: c.text, fontSize: 18, fontWeight: "600" }}>
+                −
+              </Text>
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <View
+                style={{
+                  height: 4,
+                  backgroundColor: c.border,
+                  borderRadius: 2,
+                }}
+              >
+                <View
+                  style={{
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor: c.accent,
+                    width: `${((editorFontSize - 14) / (22 - 14)) * 100}%`,
+                  }}
+                />
+              </View>
+            </View>
+            <Pressable
+              onPress={() =>
+                setEditorFontSize(Math.min(22, editorFontSize + 1))
+              }
+              style={({ pressed }) => [
+                styles.segBtn,
+                {
+                  width: 40,
+                  backgroundColor: pressed ? c.background : "transparent",
+                  borderColor: c.border,
+                },
+              ]}
+              accessibilityLabel="Increase font size"
+            >
+              <Text style={{ color: c.text, fontSize: 18, fontWeight: "600" }}>
+                +
+              </Text>
+            </Pressable>
+          </View>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginTop: 4,
+            }}
+          >
+            <Text style={{ color: c.mutedText, fontSize: 11 }}>14</Text>
+            <Pressable
+              onPress={() => setEditorFontSize(DEFAULT_EDITOR_FONT_SIZE)}
+            >
+              <Text style={{ color: c.accent, fontSize: 11 }}>Reset</Text>
+            </Pressable>
+            <Text style={{ color: c.mutedText, fontSize: 11 }}>22</Text>
           </View>
         </View>
 

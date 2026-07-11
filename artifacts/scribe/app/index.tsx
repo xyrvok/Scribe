@@ -10,7 +10,9 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { runOnJS } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Editor, type EditorHandle } from "@/components/Editor";
@@ -28,7 +30,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 
 export default function HomeScreen() {
   const { activeTheme } = useTheme();
-  const { activeNote, renameNote, createNote } = useNotes();
+  const { activeNote, renameNote, createNote, hydrated } = useNotes();
   const { toggleLeftMenu, toggleRightPanel, setSearchOpen } = usePanels();
   const insets = useSafeAreaInsets();
   const c = activeTheme.colors;
@@ -42,12 +44,20 @@ export default function HomeScreen() {
   const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false });
   const [exportOpen, setExportOpen] = useState(false);
 
+  const toggleZen = useCallback(() => setZenMode((z) => !z), []);
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDelay(300)
+    .onEnd((_e, success) => {
+      if (success) runOnJS(toggleZen)();
+    });
+
   useFocusEffect(
     useCallback(() => {
-      if (!activeNote) {
+      if (hydrated && !activeNote) {
         createNote("/", "Untitled");
       }
-    }, [activeNote, createNote]),
+    }, [hydrated, activeNote, createNote]),
   );
 
   const onContainerLayout = (e: LayoutChangeEvent) => {
@@ -167,29 +177,31 @@ export default function HomeScreen() {
       ) : null}
 
       {/* Editor area */}
-      <View style={{ flex: 1 }}>
-        {activeNote ? (
-          <Editor
-            key={activeNote.id}
-            noteId={activeNote.id}
-            initialContent={activeNote.content}
-            registerHandle={(h) => {
-              editorRef.current = h;
-            }}
-            onSelectionChange={() => {
-              if (!editorFocused) setEditorFocused(true);
-            }}
-            onUndoRedoChange={setUndoState}
-          />
-        ) : (
-          <View style={styles.emptyState}>
-            <Feather name="edit-3" size={32} color={c.mutedText} />
-            <Text style={[styles.emptyText, { color: c.mutedText }]}>
-              No note selected. Use the files panel to pick or create one.
-            </Text>
-          </View>
-        )}
-      </View>
+      <GestureDetector gesture={doubleTapGesture}>
+        <View style={{ flex: 1 }}>
+          {activeNote ? (
+            <Editor
+              key={activeNote.id}
+              noteId={activeNote.id}
+              initialContent={activeNote.content}
+              registerHandle={(h) => {
+                editorRef.current = h;
+              }}
+              onSelectionChange={() => {
+                if (!editorFocused) setEditorFocused(true);
+              }}
+              onUndoRedoChange={setUndoState}
+            />
+          ) : (
+            <View style={styles.emptyState}>
+              <Feather name="edit-3" size={32} color={c.mutedText} />
+              <Text style={[styles.emptyText, { color: c.mutedText }]}>
+                No note selected. Use the files panel to pick or create one.
+              </Text>
+            </View>
+          )}
+        </View>
+      </GestureDetector>
 
       {/* Shortcut bar above keyboard */}
       <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>

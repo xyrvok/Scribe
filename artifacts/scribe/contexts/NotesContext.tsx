@@ -174,6 +174,8 @@ type NotesContextValue = {
   ensureLoaded: (id: string) => Promise<void>;
   // Force-flush all pending disk writes immediately
   flushPendingSaves: () => Promise<void>;
+  // True once AsyncStorage hydration has finished
+  hydrated: boolean;
 };
 
 const NotesContext = createContext<NotesContextValue | null>(null);
@@ -717,6 +719,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       requestCover,
       ensureLoaded,
       flushPendingSaves,
+      hydrated,
     }),
     [
       notes,
@@ -746,6 +749,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       requestCover,
       ensureLoaded,
       flushPendingSaves,
+      hydrated,
     ],
   );
 

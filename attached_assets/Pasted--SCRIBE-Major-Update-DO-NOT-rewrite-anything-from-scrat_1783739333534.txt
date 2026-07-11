@@ -1,0 +1,604 @@
+# SCRIBE — Major Update
+
+```
+DO NOT rewrite anything from scratch. Only add or modify what each phase asks for.
+DO NOT change anything a phase does not mention.
+
+Core rules that apply to every phase:
+- Preserve ALL existing features: left swipe panel (settings + themes), right swipe 
+  panel (file explorer with list/grid/folder views + tab memory), split-screen reference 
+  panels (top and bottom), floating resizable/minimizable window, symbol and bracket 
+  shortcut bar above keyboard, custom theme system, local vault, connect-a-folder feature.
+- Use the existing Context pattern already in the codebase (NotesContext, PanelsContext). 
+  Add new contexts using the same pattern. Never prop-drill through more than 2 levels.
+- Use the existing safStorage.ts utility for all file operations. Extend it if needed 
+  rather than creating parallel storage logic.
+```
+
+---
+
+## PHASE 1 — Fix: Cursor & Screen Jumping in Editor
+
+```
+PHASE 1: Fix cursor and scroll jumping in the editor
+
+This is the most disruptive bug in the app. The screen or cursor jumps unexpectedly 
+in two situations:
+  A. After pressing Enter inside brackets or quotation marks (the shortcut bar 
+     auto-closes them and moves the cursor out), the view scrolls to an unexpected 
+     position.
+  B. During normal typing and when adding line breaks, the visible area jumps up 
+     or down randomly.
+
+Root causes to investigate and fix:
+
+1. KEYBOARD AVOIDING JUMP:
+   Check how the editor's ScrollView or KeyboardAvoidingView is configured.
+   - If using KeyboardAvoidingView with behavior="padding" or behavior="height", 
+     this can cause the view to resize and jump when the keyboard appears/shifts.
+   - Replace with a layout that uses the "软键盘" pattern: listen to 
+     Keyboard.addListener('keyboardDidShow') and manually set a paddingBottom on 
+     the scroll container equal to the keyboard height. This prevents the layout 
+     from resizing and jumping.
+   - Use KeyboardAvoidingView behavior="padding" ONLY on iOS. On Android, set 
+     behavior={undefined} and handle it manually via Keyboard listeners.
+
+2. SCROLL POSITION JUMP ON CURSOR MOVE:
+   - When the shortcut bar triggers a cursor position change (bracket close + Enter), 
+     the ScrollView may auto-scroll aggressively.
+   - After any programmatic cursor/selection change via Selection state, call 
+     scrollView.scrollTo() with animated: false to prevent the jump animation.
+   - Add a 50ms setTimeout before any scroll adjustment that follows a shortcut 
+     bar action, to let the layout settle first.
+
+3. AUTOSCROLL DURING TYPING:
+   - Ensure the TextInput for the editor has scrollEnabled={false} if it is inside 
+     a ScrollView. The ScrollView should handle all scrolling, not the TextInput itself.
+   - Having both the TextInput and its parent ScrollView trying to scroll simultaneously 
+     causes the random jumping.
+
+4. LINE BREAK JUMP:
+   - When the user presses Enter near the bottom of the visible area, the view should 
+     scroll just enough to keep the new line visible — not jump to the top or bottom.
+   - Implement this by tracking cursor Y position using onSelectionChange and only 
+     calling scrollView.scrollTo() when the cursor moves outside the currently 
+     visible area (below visibleBottom or above visibleTop).
+
+Test all four fixes together. Confirm: typing, Enter key, bracket/quote auto-close, 
+and multi-line breaks all behave without any jumping.
+```
+
+---
+
+## PHASE 2 — Fix: Markdown Rendering (Bold, Italic, Headers)
+
+```
+PHASE 2: Make markdown formatting work in the editor
+
+Currently markdown syntax is typed but nothing renders — text does not become bold, 
+italic, or a header. Fix this.
+
+The approach: use a hybrid editor model.
+- The underlying data stored in files stays as plain markdown text (e.g. **bold**).
+- The editor DISPLAYS formatted output in real time using a custom renderer.
+- This is called a "live preview" or "WYSIWYG-lite" markdown editor.
+
+Implementation:
+
+1. DO NOT replace the TextInput with a WebView or a heavy library. Keep the existing 
+   TextInput for input.
+
+2. Add a real-time markdown renderer that runs on the displayed text:
+   Use react-native-marked or a lightweight custom parser to convert the markdown 
+   content to styled React Native Text components.
+   
+   If react-native-marked is already in package.json, use it.
+   If not, implement a lightweight custom renderer supporting these formats only:
+     # Header 1       → large bold text, bigger font size
+     ## Header 2      → medium bold text
+     ### Header 3     → slightly larger bold text
+     **bold**         → bold Text component
+     *italic*         → italic Text component
+     ***bold italic** → bold + italic Text component
+     > blockquote     → left-bordered indented text
+     --- or ***       → horizontal rule / scene break line
+     Regular text     → normal paragraph
+
+3. RENDERING STRATEGY:
+   - Split the content by line breaks.
+   - For each line, detect the markdown pattern and wrap it in the correct Text style.
+   - Render the result in a read-only Text view that overlays or sits directly below 
+     the TextInput.
+   
+   PREFERRED approach given the existing editor structure:
+   - Use a "write mode / read mode" toggle:
+     - Write mode: shows the raw TextInput with markdown syntax visible (for editing).
+     - Read mode (Preview): shows the beautifully rendered markdown output.
+     - Toggle button in the editor toolbar (an eye icon): switches between modes.
+     - This is how iA Writer and Ulysses handle it on mobile — clean and reliable.
+
+4. ALTERNATIVELY, if the existing Editor.tsx already attempts inline rendering:
+   - Read the current approach first.
+   - Fix whatever is broken rather than replacing the whole system.
+
+5. The shortcut bar's ** bold **, * italic * buttons must insert the correct markdown 
+   syntax around selected text, or at cursor position if nothing is selected.
+   If this is not already working, fix it in this phase.
+```
+
+---
+
+## PHASE 3 — Fix: Connect-a-Folder Showing Folders as TXT Files
+
+```
+PHASE 3: Fix the Connect Folder feature — folders appearing as TXT files
+
+The existing app has two storage modes:
+  1. Local Vault — files and folders created inside the app's private storage.
+  2. Connect Folder — user picks any folder from their phone using a folder picker, 
+     and the app reads/writes there. This lets users survive an uninstall by keeping 
+     files on phone storage.
+
+The bug: in the Connect Folder file explorer, ALL folders are showing up as TXT files. 
+Clicking them open it in edit mode. Actual text files are showing and working correctly.
+
+Fix:
+
+1. READ THE EXISTING FileTree.tsx AND safStorage.ts FULLY before touching anything.
+   Understand exactly how the connected folder's contents are being read.
+
+2. THE BUG: When reading directory contents using expo-file-system's 
+   FileSystem.readDirectoryAsync(), it returns a flat list of names (strings) — 
+   it does NOT tell you which items are files vs folders.
+   
+   To distinguish files from folders, you must call FileSystem.getInfoAsync(itemPath) 
+   on each item and check the isDirectory property in the result.
+   
+   The current code is likely treating all items as files. Fix it by:
+   - For each item name returned by readDirectoryAsync(), call getInfoAsync() on the 
+     full path.
+   - If result.isDirectory === true → render it as a FOLDER (tappable, expandable, 
+     shows folder icon, no file extension shown).
+   - If result.isDirectory === false → render it as a FILE (show name, tappable to open).
+
+3. Make these getInfoAsync() calls in parallel using Promise.all() for performance — 
+   do NOT await them one by one in a loop.
+
+4. FOLDER BEHAVIOR after fix:
+   - Tapping a folder expands it inline (same as Local Vault folders do).
+   - Folders show a folder icon matching the existing UI style.
+   - Files inside show correctly with their file type icon.
+   - Empty folders, that don't have any text/md files shouldn't show.
+
+5. FILTER: Only show .txt and .md files. Silently ignore all other file types 
+   (.jpg, .pdf, system files etc.) so the explorer stays clean.
+
+6. The Local Vault explorer must not be touched — only fix the Connect Folder path.
+```
+
+---
+
+## PHASE 4 — Project Structure (Project → Chapter → Scene)
+
+```
+PHASE 4: Add novel project structure — Projects, Chapters, Scenes
+
+Writers think in Projects, Chapters, and Scenes — not generic folders and files. 
+Add this structure as a layer ON TOP of the existing folder/file system. 
+Do not replace the existing file explorer — add a "Novel Projects" view as a new 
+tab or toggle at the top of the right panel alongside the existing views.
+
+File structure on disk (inside Local Vault):
+  /novels/
+    [ProjectName]/
+      project.json     ← { title, dateCreated, lastModified, totalWordCount, coverColor }
+      [ChapterName]/
+        chapter.json   ← { title, orderIndex, status, wordCount }
+        [SceneName].md ← plain markdown text content
+
+New UI in the right swipe panel:
+1. Add a "Projects" tab at the top of the file explorer panel alongside the existing 
+   List / Grid / Folder view options.
+2. In Projects view:
+   - Show project cards with: title, cover image, color dot, total word count, last modified date.
+   - Tap a project → expands to show its chapters.
+   - Tap a chapter → expands to show its scenes, if a scene is added.
+   - Tap a scene → opens it in the editor.
+3. Long pressing a project shows: Rename, Change Color, Delete (with confirmation).
+4. Long pressing a chapter shows: Rename, Set Status, Delete (with confirmation).
+5. Long pressing a scene shows the EXISTING long-press menu options PLUS Set Status.
+
+Scene status colors:
+  Draft → gray dot
+  In Progress → yellow dot  
+  Needs Revision → orange dot
+  Final → green dot
+Status stored in chapter.json's scene list.
+
+Creating new items:
+- "New Project" button at top of Projects view.
+- Inside a project, "New Chapter" button.
+- Inside a chapter, "New Scene" button. Optional, if not selected, the chapter will become the file.
+- All creation uses a simple name-input modal (same style as existing modals).
+
+The existing Local Vault and Connect Folder views must still work exactly as before. 
+Projects view is additive — a third option, not a replacement.
+```
+
+---
+
+## PHASE 5 — Autosave + Version History + Crash Recovery
+
+```
+PHASE 5: Autosave, version history, crash recovery
+
+1. AUTOSAVE:
+   - Autosave the open file every 30 seconds IF content changed since last save.
+   - Use a 2000ms debounce on the editor's onChange — do NOT save on every keystroke.
+   - Show a small status indicator in the top bar:
+       "Saving..." while in progress
+       "Saved" for 2 seconds after save (then disappears)
+       "Unsaved changes" while edits are pending
+   - All saves are async. Never block the UI thread during save.
+   - Use the existing safStorage.ts writeFile function — do not create parallel save logic.
+
+2. VERSION HISTORY:
+   - On every save, copy the previous content to a .history folder next to the file.
+   - Example: /novels/MyBook/Ch1/Scene1.md saves history to 
+     /novels/MyBook/Ch1/.history/Scene1_[timestamp].md
+   - Keep maximum 10 snapshots per file. Delete the oldest when limit exceeded.
+   - In the long-press menu on any file/scene, add a "Version History" option.
+   - History screen: list of saved timestamps, tap one to preview that version.
+   - "Restore this version" button with a confirmation dialog before overwriting.
+
+3. CRASH RECOVERY:
+   - On every autosave, also write content + file path to:
+     [appDocumentDirectory]/.recovery/lastSession.json
+     Format: { filePath, content, savedAt }
+   - On app launch, check if .recovery/lastSession.json exists.
+   - If yes, show a non-intrusive banner at top: 
+     "Unsaved session found — Restore?" with [Restore] and [Dismiss] buttons.
+   - Restore: reopen that file and load the recovered content.
+   - Dismiss: delete the recovery file silently.
+```
+
+---
+
+## PHASE 6 — Word Count + Daily Goal + Writing Streak
+
+```
+PHASE 6: Word count system, daily writing goal, streak tracker
+
+1. LIVE WORD COUNT in editor top bar:
+   - Format: "Scene: 342 words  |  Session: 1,204"
+   - Scene count = words in the currently open file.
+   - Session count = words written since the app was opened (resets on close).
+   - Update maximum once per second using throttle — NOT on every keystroke.
+   - Word count formula: content.trim().split(/\s+/).filter(Boolean).length
+   - Show "0 words" on empty files, not blank.
+
+2. PROJECT TOTAL WORD COUNT:
+   - Show total word count under each project name in the Projects view.
+   - Recalculate and update project.json's totalWordCount every time a scene is saved.
+   - Load from project.json on display — no need to re-read all files every time.
+
+3. DAILY WRITING GOAL:
+   - Add "Daily Word Goal" setting in the left swipe Settings panel. Default: 500 words.
+   - Track today's written words in AsyncStorage with key format: "dailyWords_YYYY-MM-DD"
+   - Increment this count during each session (words written this session, added to today's total).
+   - Show a thin progress bar at the very top of the editor (above the toolbar):
+       Empty (0%) to full (100%) as user approaches goal.
+       Color: theme accent color while in progress, green when goal is reached.
+       Height: 3px — subtle, not distracting.
+   - When goal is first reached, show a brief celebration: the progress bar pulses 
+     once with a glow effect using React Native's Animated API. No third-party libraries.
+
+4. WRITING STREAK:
+   - A streak day = any day the user writes at least 1 word.
+   - Store in AsyncStorage: { currentStreak, longestStreak, lastWriteDate }
+   - Check and update on app launch: if lastWriteDate was yesterday, streak continues. 
+     If it was 2+ days ago, reset currentStreak to 0. If today, no change.
+   - Display in the Settings panel: "🔥 12 day streak  |  Best: 34 days"
+   - Update longestStreak whenever currentStreak exceeds it.
+```
+
+---
+
+## PHASE 7 — Find & Replace + Focus Mode + Typewriter Scroll
+
+```
+PHASE 7: Find & Replace, Distraction-Free Focus Mode, Typewriter Scroll
+
+1. FIND & REPLACE:
+   - A toolbar that slides down from below the editor's top bar when activated.
+   - Trigger: magnifying glass icon button in the editor toolbar.
+   - Find field: highlights all matches in the text. Show match count: "4 of 11"
+   - Previous / Next arrows to jump between matches.
+   - Replace field + "Replace" button (replaces current match only).
+   - "Replace All" button with a confirmation: "Replace all 11 occurrences?"
+   - Toggle options: [Aa] Case sensitive,  [W] Whole word only.
+   - Close (X) button slides the toolbar back up.
+   - Must work on documents up to 100,000 words without freezing.
+   - Implement match highlighting using a custom Text renderer that wraps match 
+     spans in a highlighted background color. Do not use a WebView for this.
+
+2. DISTRACTION-FREE FOCUS MODE:
+   - Triggered by: double-tap anywhere on the writing area (not on text selection handles).
+   - Focus mode hides: top bar, shortcut bar, status bar, all surrounding UI chrome.
+   - Shows only: the text content, and a faint word count at the very bottom center.
+   - Single tap anywhere brings all UI back.
+   - Transition: smooth fade in/out using React Native Animated API, 200ms duration.
+   - The floating window, if open, should also hide in focus mode and restore on exit.
+
+3. TYPEWRITER SCROLL MODE:
+   - Toggle in the Settings panel: "Typewriter Mode" (off by default).
+   - When ON: the line where the cursor is currently typing is always kept 
+     vertically centered on the screen.
+   - Implementation: use onSelectionChange to get cursor position, calculate its 
+     Y offset within the content, then call scrollViewRef.scrollTo() to center it.
+   - Smooth: use animated: true with a short 100ms duration.
+   - Only activate scrollTo when cursor Y position changes by more than one line height 
+     to avoid micro-jitter.
+
+4. PARAGRAPH SPACING:
+   - In Settings, add "Line Spacing" option with three choices:
+       Compact (lineHeight: 1.4×)
+       Comfortable (lineHeight: 1.7×) ← default
+       Spacious (lineHeight: 2.0×)
+   - Applies immediately to the editor without restart.
+   - Store preference in AsyncStorage.
+```
+
+---
+
+## PHASE 8 — Character Sheets & Location Cards
+
+```
+PHASE 8: Character sheets and location cards
+
+These let writers keep notes about their characters and places without leaving the app. 
+They integrate with the existing split-screen reference panel feature.
+
+1. WHERE THEY LIVE:
+   - Add two new buttons to the left swipe panel (below Settings and Themes):
+       [Characters]  [Locations]
+   - These open a full-screen overlay (same animation style as existing panels).
+
+2. CHARACTER CARDS:
+   - Characters are stored per-project in /novels/[ProjectName]/characters.json
+   - If no project is open, characters are stored in a global characters.json in the vault root.
+   - Each character card has: Name, Role (Protagonist / Antagonist / Supporting / Other), 
+     Age, Appearance (multiline text), Personality (multiline text), 
+     Backstory (multiline text), Notes (multiline text), Color tag (for visual ID).
+   - Character list view: cards showing name + role + color dot.
+   - Tap a card to view/edit it in a modal.
+   - Long press a card: Edit / Send to Split Panel / Delete.
+
+3. LOCATION CARDS:
+   - Same structure and storage pattern as Character cards.
+   - Stored in /novels/[ProjectName]/locations.json
+   - Fields: Name, Description (multiline), Atmosphere (multiline), Notes (multiline), 
+     Color tag.
+
+4. SEND TO SPLIT PANEL:
+   - Long pressing a character or location card shows "Send to Top Panel" and 
+     "Send to Bottom Panel" — same options that already exist for files.
+   - When sent, the split panel renders the character/location card as a formatted 
+     read-only view (name as heading, fields as labeled sections).
+   - This lets writers keep a character's details visible in the reference panel 
+     while writing about them in the editor.
+
+5. STORAGE:
+   - Use the existing safStorage.ts pattern for reading and writing JSON files.
+   - Auto-create characters.json and locations.json if they don't exist.
+   - All operations async with try/catch.
+```
+
+---
+
+## PHASE 9 — Export System
+
+```
+PHASE 9: Export — TXT, Markdown, HTML, EPUB, DOCX
+
+Writers need to get their work out. Add an export system.
+
+1. ENTRY POINT:
+   - Long pressing a Project in the Projects view shows "Export Project" option.
+   - Long pressing any single file shows "Export File" option.
+   - Both open the same Export Modal with relevant scope pre-selected.
+
+2. EXPORT MODAL:
+   Shows these options before confirming:
+   - Scope: "This file only" or "Entire project" (whole project concatenated in order)
+   - Format: TXT / Markdown / HTML / EPUB / DOCX (radio buttons)
+   - Chapter titles: include / exclude toggle
+   - Scene breaks: "* * *" / "---" / blank line (radio buttons)
+   - Author name field (pre-filled from Settings if set there)
+   - [Export] button
+
+3. FORMAT IMPLEMENTATIONS:
+
+   A. PLAIN TXT:
+      Concatenate all scenes in chapter order with chapter titles as plain text headers.
+      Share via expo-sharing. Simple, always works.
+
+   B. MARKDOWN (.md):
+      Concatenate all scenes preserving existing markdown syntax.
+      Chapter titles as # headers. Share via expo-sharing.
+
+   C. HTML (manuscript-formatted):
+      Generate a single clean HTML file with embedded CSS:
+        font-family: Georgia, serif
+        font-size: 12pt
+        line-height: 2.0
+        max-width: 650px, centered
+        Chapter titles centered and bold
+        Scene breaks as centered "* * *"
+      User can open in browser and print to PDF themselves.
+      Share via expo-sharing.
+
+   D. EPUB (basic, valid EPUB 3.0):
+      Build file structure as strings in JS — no heavy library needed:
+        mimetype file
+        META-INF/container.xml
+        OEBPS/content.opf (metadata: title, author, date)
+        OEBPS/toc.ncx
+        OEBPS/chapter_[N].xhtml (one per chapter)
+      Package into a ZIP using a minimal JS zip implementation (use fflate if already 
+      in package.json, otherwise implement a minimal deflate-free store-only zip).
+      Save as .epub and share via expo-sharing.
+
+   E. DOCX (basic Open XML):
+      Build a minimal valid .docx structure as strings:
+        word/document.xml with Normal paragraphs and Heading1 for chapter titles
+        word/styles.xml with minimal style definitions
+        [Content_Types].xml and _rels/.rels
+      Package as ZIP, save as .docx, share via expo-sharing.
+
+4. PROGRESS:
+   - Show a progress overlay while exporting: spinner + "Exporting..." text.
+   - Run all file reading and generation in async operations.
+   - Never block the UI thread. Use Promise.all for reading multiple scenes.
+```
+
+---
+
+## PHASE 10 — Full Performance Optimization
+
+```
+PHASE 10: Performance audit and optimization — no new features, only speed and stability
+
+After everything, make these improvements:
+
+1. EDITOR PERFORMANCE:
+   - The editor must handle 100,000 words without lag or dropped frames.
+   - Confirm the TextInput has scrollEnabled={false} if inside a ScrollView.
+   - Word count calculation: throttle to maximum once per second using a ref-based 
+     throttle (no library needed). Do not recalculate on every keystroke.
+   - Autosave debounce: confirm it is 2000ms and not firing more frequently.
+   - Wrap the Editor component in React.memo with a custom comparator that only 
+     re-renders when fileContent or theme actually changes.
+
+2. FILE EXPLORER PERFORMANCE:
+   - Every list of files or projects must use FlatList, not ScrollView + .map().
+   - Add getItemLayout to FlatList wherever item height is fixed or predictable.
+   - Add keyExtractor using the full file path as the key.
+   - Set windowSize={5} and maxToRenderPerBatch={8} on all FlatLists.
+   - Cache directory listing results in a ref or context so the explorer does not 
+     re-read disk every time the panel opens. Invalidate cache only on write operations.
+
+3. CONTEXT PERFORMANCE:
+   - Split any large context that contains both frequently-changing values (like 
+     current word count) and rarely-changing values (like theme) into separate contexts.
+   - Components that only need theme should not re-render when word count changes.
+   - Use useMemo on all context value objects so they don't create new object references 
+     on every render.
+
+4. PANELS AND FLOATING WINDOW:
+   - FloatingWindow.tsx must be wrapped in React.memo.
+   - Any scrollable content inside split panels must use FlatList, not ScrollView + map.
+   - Panel open/close animations must use useNativeDriver: true wherever possible.
+
+5. APP LAUNCH:
+   - Defer all AsyncStorage reads that are not needed for first render.
+   - Use InteractionManager.runAfterInteractions() for file listing on first open.
+   - Store the last opened file path in AsyncStorage as "lastOpenedFile". 
+     On launch, immediately restore and display it before any other loading completes.
+
+6. MEMORY MANAGEMENT:
+   - Every useEffect that sets up a timer, interval, keyboard listener, or 
+     AppState listener MUST return a cleanup function that clears/removes it.
+   - Confirm autosave interval, word count throttle, and keyboard listeners 
+     all clean up correctly when the editor unmounts.
+
+7. IMPORTS:
+   - Find any imports that pull in an entire library when only one function is needed.
+   - Replace: import _ from 'lodash' → import { debounce } from 'lodash'
+   - Check package.json for unused dependencies and list them so I can decide whether 
+     to remove them.
+
+After this phase, report:
+- Any remaining TypeScript errors or warnings
+- Any deprecated API usage found
+- List of files changed
+- Confirm all phases 1–9 still work together correctly
+```
+
+---
+
+## BONUS PHASE — Polish
+
+```
+BONUS: Final polish pass — no new features, only feel and finish
+
+1. ANIMATIONS:
+   All modals, overlays, and sliding panels must use smooth open/close animations:
+   Duration 200–250ms, easing: Easing.out(Easing.cubic)
+   Use React Native Animated API only — no third-party animation libraries.
+
+2. TOUCH FEEDBACK:
+   Replace any remaining TouchableOpacity usage with Pressable.
+   All Pressable buttons must have: opacity 0.7 on press, restore on release.
+   Use the style prop with a function: style={({ pressed }) => pressed ? styles.pressed : styles.default}
+
+3. HAPTIC FEEDBACK using expo-haptics:
+   - File saved → Haptics.impactAsync(ImpactFeedbackStyle.Light)
+   - Daily word goal reached → Haptics.notificationAsync(NotificationFeedbackType.Success)
+   - File deleted → Haptics.impactAsync(ImpactFeedbackStyle.Medium) 
+   - Long press context menu opens → Haptics.selectionAsync()
+   - Restore version (destructive) → Haptics.notificationAsync(NotificationFeedbackType.Warning)
+
+4. SHORTCUT BAR ADDITIONS:
+   Add these two buttons to the existing shortcut bar if not already present:
+   - Em dash button: inserts — at cursor
+   - Ellipsis button: inserts … at cursor
+   These are the two most-used special characters in fiction writing.
+
+5. FONT OPTIONS in Settings:
+   Add "Editor Font" option with these choices:
+   - System Default
+   - Serif (Georgia / Noto Serif)
+   - Monospace (Courier / monospace)
+   Apply immediately to the editor. Store preference in AsyncStorage.
+   
+   Add "Font Size" slider in Settings:
+   - Range: 14px to 22px
+   - Default: 16px
+   - Live preview as slider moves.
+   - Store in AsyncStorage.
+
+6. EMPTY STATES:
+   Every empty list must show a friendly placeholder — never a blank white space:
+   - No projects yet → "Tap + to create your first project"
+   - No chapters in project → "Add your first chapter to get started"
+   - No characters → "Add characters to keep track of your cast"
+   - No version history → "No saved versions yet"
+
+7. ORIENTATION:
+   Confirm the app layout works in both portrait AND landscape.
+   In landscape, the split-screen panels should have more usable horizontal space.
+
+8. DARK MODE CHECK:
+   Confirm every new screen added in phases 1–10 correctly applies the active theme's 
+   colors. No hardcoded white backgrounds or black text anywhere — all colors must 
+   come from the theme context.
+```
+
+---
+
+## PROGRESS CHECKLIST And WORKFLOW
+
+- [ ] Phase 1  — Cursor & scroll jumping fixed
+- [ ] Phase 2  — Markdown rendering (bold, italic, headers) working
+- [ ] Phase 3  — Connect Folder showing folders correctly (not as TXT files)
+- [ ] Phase 4  — Project / Chapter / Scene structure added
+- [ ] Phase 5  — Autosave + version history + crash recovery
+- [ ] Phase 6  — Word count + daily goal + writing streak
+- [ ] Phase 7  — Find & Replace + Focus Mode + Typewriter Scroll
+- [ ] Phase 8  — Character sheets + Location cards
+- [ ] Phase 9  — Export (TXT, MD, HTML, EPUB, DOCX)
+- [ ] Phase 10 — Full performance optimization
+- [ ] Bonus   — Polish (haptics, fonts, empty states, animations)
+
+Use the workflow that's easier for you to Update accurately, meaning you can start from any phase and end on any phase, but all 10 phases plus the bonus phase should be covered

@@ -21,7 +21,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 
 import { FONT_FAMILY_MAP } from "@/constants/defaultThemes";
 import { useNotes } from "@/contexts/NotesContext";
-import { usePanels } from "@/contexts/PanelsContext";
+import { LINE_SPACING_MAP, usePanels } from "@/contexts/PanelsContext";
 import type { Shortcut } from "@/contexts/ShortcutsContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { countWords, readingTimeMinutes } from "@/lib/markdown";
@@ -87,7 +87,8 @@ export function Editor({
 }: EditorProps) {
   const { activeTheme } = useTheme();
   const { updateNoteContent } = useNotes();
-  const { showWordCount, typewriterMode } = usePanels();
+  const { showWordCount, typewriterMode, lineSpacing, editorFontSize } =
+    usePanels();
   const { dailyGoal, todayWords, goalReached, recordWordDelta } =
     useWritingStats();
   const c = activeTheme.colors;
@@ -464,7 +465,10 @@ export function Editor({
   }, [noteId]);
 
   const fontFamily = FONT_FAMILY_MAP[activeTheme.fontFamily];
-  const lineHeightPx = activeTheme.fontSize * activeTheme.lineHeight;
+  const effectiveFontSize =
+    editorFontSize > 0 ? editorFontSize : activeTheme.fontSize;
+  const effectiveLineHeightRatio = LINE_SPACING_MAP[lineSpacing];
+  const lineHeightPx = effectiveFontSize * effectiveLineHeightRatio;
 
   const stats = useMemo(
     () => ({
@@ -609,7 +613,7 @@ export function Editor({
                 {
                   color: c.text,
                   fontFamily,
-                  fontSize: activeTheme.fontSize,
+                  fontSize: effectiveFontSize,
                   lineHeight: lineHeightPx,
                   letterSpacing: activeTheme.letterSpacing,
                   minHeight: 400,
